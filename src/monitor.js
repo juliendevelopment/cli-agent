@@ -229,6 +229,20 @@ function detectTerminalStatus(paneOutput, procInfo) {
   return STATUS_TYPES.IDLE;
 }
 
+function getPaneOutputForBookmark(bookmarkId, activeId, lineCount = 35) {
+  const target = (bookmarkId === activeId)
+    ? 'cli_agent:0.1'
+    : `cli_agent:_pane_${bookmarkId}.0`;
+  return getPaneOutput(target, lineCount);
+}
+
+function getPaneProcessForBookmark(bookmarkId, activeId) {
+  const target = (bookmarkId === activeId)
+    ? 'cli_agent:0.1'
+    : `cli_agent:_pane_${bookmarkId}.0`;
+  return getPaneProcess(target);
+}
+
 module.exports = {
   STATUS_TYPES,
   loadManualStatuses,
@@ -236,5 +250,7 @@ module.exports = {
   getGitInfo,
   getPaneOutput,
   getPaneProcess,
+  getPaneOutputForBookmark,
+  getPaneProcessForBookmark,
   detectTerminalStatus
 };

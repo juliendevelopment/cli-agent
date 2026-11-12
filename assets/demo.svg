@@ -6,21 +6,14 @@
       .border { fill: none; stroke: #313244; stroke-width: 1; }
       .sidebar-bg { fill: #181825; }
       .terminal-bg { fill: #1e1e2e; }
-      .text-title { font-family: monospace; font-size: 15px; font-weight: bold; fill: #89b4fa; }
-      .text-sub { font-family: monospace; font-size: 11px; fill: #a6adc8; }
-      .text-bm-title { font-family: monospace; font-size: 13px; font-weight: bold; fill: #a6e3a1; }
-      .text-bm-path { font-family: monospace; font-size: 11px; fill: #89dceb; }
-      .text-bm-gray { font-family: monospace; font-size: 11px; fill: #6c7086; }
-      .text-badge { font-family: monospace; font-size: 10px; font-weight: bold; }
+      .text-title { font-family: monospace; font-size: 13px; font-weight: bold; fill: #89b4fa; }
+      .text-bm-title { font-family: monospace; font-size: 12px; font-weight: bold; fill: #a6e3a1; }
+      .text-bm-dim { font-family: monospace; font-size: 12px; fill: #cdd6f4; }
+      .text-badge { font-family: monospace; font-size: 9px; font-weight: bold; }
       .text-term { font-family: monospace; font-size: 13px; fill: #cdd6f4; }
       .text-term-dim { font-family: monospace; font-size: 12px; fill: #9399b2; }
-      .text-term-prompt { font-family: monospace; font-size: 13px; font-weight: bold; fill: #f9e2af; }
       .status-bar { fill: #11111b; }
     </style>
-    <linearGradient id="yellow-badge" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#f9e2af" />
-      <stop offset="100%" stop-color="#fab387" />
-    </linearGradient>
   </defs>
 
   <!-- Window Frame -->
@@ -31,97 +24,80 @@
   <circle cx="20" cy="18" r="6" fill="#f38ba8" />
   <circle cx="40" cy="18" r="6" fill="#f9e2af" />
   <circle cx="60" cy="18" r="6" fill="#a6e3a1" />
-  <text x="500" y="23" text-anchor="middle" font-family="monospace" font-size="12" fill="#6c7086">CLI-Agent Workspace — claude &amp; copilot launcher</text>
+  <text x="500" y="23" text-anchor="middle" font-family="monospace" font-size="12" fill="#6c7086">CLI-Agent Workspace — Multi-Session AI Terminal</text>
 
-  <!-- Sidebar (Left Pane, 310px width) -->
-  <rect x="0" y="36" width="310" height="554" class="sidebar-bg" />
-  <line x1="310" y1="36" x2="310" y2="590" stroke="#45475a" stroke-width="2" />
+  <!-- Compact Sidebar (Left Pane, 220px width) -->
+  <rect x="0" y="36" width="220" height="554" class="sidebar-bg" />
+  <line x1="220" y1="36" x2="220" y2="590" stroke="#45475a" stroke-width="2" />
 
-  <!-- Sidebar Header -->
-  <rect x="15" y="52" width="280" height="54" rx="6" fill="#1e1e2e" stroke="#313244" stroke-width="1" />
-  <text x="28" y="74" class="text-title">🤖 CLI-AGENT <tspan fill="#6c7086" font-size="11">v1.0.0</tspan></text>
-  <text x="28" y="93" class="text-sub">AI Agent Workspace Manager</text>
+  <!-- Compact Sidebar Header -->
+  <text x="14" y="60" class="text-title">🤖 CLI-AGENT <tspan fill="#6c7086" font-size="10">v1.0</tspan></text>
+  <line x1="12" y1="70" x2="208" y2="70" stroke="#313244" stroke-width="1" />
 
-  <!-- Bookmarks Title -->
-  <text x="18" y="132" font-family="monospace" font-size="12" font-weight="bold" fill="#f9e2af">📁 BOOKMARKS / PROJECTS (4)</text>
-  <line x1="15" y1="140" x2="295" y2="140" stroke="#313244" stroke-width="1" />
+  <!-- Projects Section Header -->
+  <text x="14" y="90" font-family="monospace" font-size="11" font-weight="bold" fill="#f9e2af">PROJECTS (3)</text>
 
-  <!-- Bookmark 1 (Selected, Active Alert) -->
-  <rect x="10" y="148" width="290" height="72" rx="6" fill="#313244" opacity="0.6" />
-  <text x="20" y="168" class="text-bm-title">▶ 1. Backend API</text>
-  <text x="36" y="186" class="text-bm-path">~/dev/projects/backend-api <tspan fill="#6c7086">[claude]</tspan></text>
-  
-  <!-- Badge Action Required -->
-  <rect x="36" y="194" width="130" height="18" rx="4" fill="#f9e2af" />
-  <text x="42" y="207" class="text-badge" fill="#181825">🔔 ACTION REQUIRED</text>
-  <text x="175" y="207" font-family="monospace" font-size="10" fill="#fab387"> main* (3)</text>
+  <!-- Bookmark 1 (Selected, Active in Right Pane) -->
+  <rect x="6" y="102" width="208" height="42" rx="4" fill="#313244" opacity="0.7" />
+  <text x="14" y="118" class="text-bm-title">▶ 1. Backend API</text>
+  <rect x="24" y="124" width="76" height="15" rx="3" fill="#f9e2af" />
+  <text x="28" y="135" class="text-badge" fill="#181825">🔔 ACTION</text>
+  <text x="106" y="135" font-family="monospace" font-size="10" fill="#6c7086">[claude]</text>
 
-  <!-- Bookmark 2 -->
-  <text x="28" y="244" font-family="monospace" font-size="13" font-weight="bold" fill="#cdd6f4">2. React Web App</text>
-  <text x="36" y="262" font-family="monospace" font-size="11" fill="#6c7086">~/dev/frontend/dashboard [copilot]</text>
-  <rect x="36" y="270" width="90" height="18" rx="4" fill="#89dceb" />
-  <text x="44" y="283" class="text-badge" fill="#181825">⚡ RUNNING...</text>
-  <text x="135" y="283" font-family="monospace" font-size="10" fill="#cdd6f4"> feat/auth</text>
+  <!-- Bookmark 2 (Independent Session Running in Background) -->
+  <text x="14" y="162" class="text-bm-dim">  2. React Dashboard</text>
+  <rect x="24" y="168" width="60" height="15" rx="3" fill="#89dceb" />
+  <text x="28" y="179" class="text-badge" fill="#181825">⚡ RUN</text>
+  <text x="90" y="179" font-family="monospace" font-size="10" fill="#6c7086">[copilot]</text>
 
-  <!-- Bookmark 3 -->
-  <text x="28" y="315" font-family="monospace" font-size="13" font-weight="bold" fill="#cdd6f4">3. Payment Microservice</text>
-  <text x="36" y="333" font-family="monospace" font-size="11" fill="#6c7086">~/dev/services/pay [claude]</text>
-  <text x="36" y="352" font-family="monospace" font-size="11" fill="#a6e3a1">✓ Done</text>
-  <text x="95" y="352" font-family="monospace" font-size="10" fill="#6c7086"> main</text>
+  <!-- Bookmark 3 (Independent Session Idle) -->
+  <text x="14" y="206" class="text-bm-dim">  3. Microservice</text>
+  <text x="24" y="222" font-family="monospace" font-size="10" fill="#a6e3a1">✓ Done <tspan fill="#6c7086">[claude]</tspan></text>
 
-  <!-- Bookmark 4 -->
-  <text x="28" y="380" font-family="monospace" font-size="13" font-weight="bold" fill="#cdd6f4">4. Tech Documentation</text>
-  <text x="36" y="398" font-family="monospace" font-size="11" fill="#6c7086">~/dev/docs/wiki [shell]</text>
-  <text x="36" y="416" font-family="monospace" font-size="11" fill="#6c7086">● Idle</text>
-  <text x="95" y="416" font-family="monospace" font-size="10" fill="#6c7086"> master</text>
+  <!-- Keyboard Shortcuts Box -->
+  <line x1="12" y1="460" x2="208" y2="460" stroke="#313244" stroke-width="1" />
+  <text x="14" y="482" font-family="monospace" font-size="10" fill="#a6e3a1">[Enter] Switch <tspan fill="#89dceb">[c]</tspan> Claude</text>
+  <text x="14" y="500" font-family="monospace" font-size="10" fill="#a6e3a1">[p] Copilot    <tspan fill="#89dceb">[a]</tspan> Add</text>
+  <text x="14" y="518" font-family="monospace" font-size="10" fill="#a6e3a1">[d] Delete     <tspan fill="#89dceb">[&lt; &gt;]</tspan> Size</text>
+  <text x="14" y="536" font-family="monospace" font-size="10" fill="#a6e3a1">[Tab] Term     <tspan fill="#89dceb">[q]</tspan> Quit</text>
 
-  <!-- Sidebar Shortcuts Box -->
-  <line x1="15" y1="440" x2="295" y2="440" stroke="#313244" stroke-width="1" />
-  <text x="18" y="460" font-family="monospace" font-size="11" font-weight="bold" fill="#89dceb">KEYBOARD SHORTCUTS</text>
-  <text x="20" y="480" font-family="monospace" font-size="11" fill="#a6e3a1">[Enter]<tspan fill="#cdd6f4"> Open folder (Shell)</tspan></text>
-  <text x="20" y="498" font-family="monospace" font-size="11" fill="#a6e3a1">[c]    <tspan fill="#cdd6f4"> Launch Claude Code</tspan></text>
-  <text x="20" y="516" font-family="monospace" font-size="11" fill="#a6e3a1">[p]    <tspan fill="#cdd6f4"> Launch GitHub Copilot</tspan></text>
-  <text x="20" y="534" font-family="monospace" font-size="11" fill="#a6e3a1">[a]    <tspan fill="#cdd6f4"> Add bookmark</tspan></text>
-  <text x="20" y="552" font-family="monospace" font-size="11" fill="#a6e3a1">[d]    <tspan fill="#cdd6f4"> Delete bookmark</tspan></text>
-  <text x="20" y="570" font-family="monospace" font-size="11" fill="#a6e3a1">[Tab]  <tspan fill="#cdd6f4"> Switch to terminal</tspan></text>
-
-  <!-- Right Terminal Pane (690px width) -->
-  <rect x="312" y="36" width="688" height="554" class="terminal-bg" />
+  <!-- Right Terminal Pane (780px width) -->
+  <rect x="222" y="36" width="778" height="554" class="terminal-bg" />
 
   <!-- Terminal Session Content -->
-  <g transform="translate(330, 70)">
-    <text x="0" y="0" class="text-term-dim">user@workspace:~$ <tspan fill="#cdd6f4">cd ~/dev/projects/backend-api &amp;&amp; claude</tspan></text>
+  <g transform="translate(242, 70)">
+    <text x="0" y="0" class="text-term-dim">user@workspace:~/projects/backend-api$ <tspan fill="#cdd6f4">claude</tspan></text>
     
     <!-- Claude Code Banner -->
-    <rect x="0" y="16" width="650" height="90" rx="8" fill="#181825" stroke="#313244" stroke-width="1" />
+    <rect x="0" y="16" width="738" height="85" rx="8" fill="#181825" stroke="#313244" stroke-width="1" />
     <text x="20" y="42" font-family="monospace" font-size="14" font-weight="bold" fill="#fab387">✻ Claude Code</text>
-    <text x="150" y="42" font-family="monospace" font-size="11" fill="#6c7086">v2.1 • Research &amp; Automation</text>
-    <text x="20" y="66" font-family="monospace" font-size="12" fill="#a6adc8">Target project: <tspan fill="#89dceb">~/dev/projects/backend-api</tspan> (Python 3.12, FastAPI)</text>
-    <text x="20" y="88" font-family="monospace" font-size="12" fill="#a6adc8">Repository status: <tspan fill="#f9e2af">3 files modified</tspan></text>
+    <text x="150" y="42" font-family="monospace" font-size="11" fill="#6c7086">v2.1 • Independent Session (Project 1)</text>
+    <text x="20" y="66" font-family="monospace" font-size="12" fill="#a6adc8">Target project: <tspan fill="#89dceb">~/projects/backend-api</tspan></text>
+    <text x="20" y="86" font-family="monospace" font-size="12" fill="#a6adc8">Background Session 2 (React Dashboard): <tspan fill="#89dceb">Running Copilot in background</tspan></text>
 
     <!-- User input and Claude execution -->
-    <text x="0" y="135" font-family="monospace" font-size="13" font-weight="bold" fill="#89b4fa">❯ <tspan fill="#cdd6f4">Refactor the JWT auth token verification and add test coverage</tspan></text>
+    <text x="0" y="130" font-family="monospace" font-size="13" font-weight="bold" fill="#89b4fa">❯ <tspan fill="#cdd6f4">Refactor JWT authentication and run tests</tspan></text>
     
-    <text x="0" y="165" font-family="monospace" font-size="12" fill="#a6e3a1">● Reading src/auth/jwt.py (142 lines)</text>
-    <text x="0" y="185" font-family="monospace" font-size="12" fill="#a6e3a1">● Updated token expiration handling in src/auth/jwt.py</text>
-    <text x="0" y="205" font-family="monospace" font-size="12" fill="#a6e3a1">● Created tests/test_jwt_auth.py with 8 unit tests</text>
+    <text x="0" y="160" font-family="monospace" font-size="12" fill="#a6e3a1">● Reading src/auth/jwt.py (142 lines)</text>
+    <text x="0" y="180" font-family="monospace" font-size="12" fill="#a6e3a1">● Updated expiration validation logic</text>
+    <text x="0" y="200" font-family="monospace" font-size="12" fill="#a6e3a1">● Created tests/test_auth.py with 8 unit tests</text>
 
-    <!-- Claude Action Confirmation Prompt (triggers the ACTION REQUIRED badge) -->
-    <rect x="0" y="235" width="650" height="70" rx="6" fill="#181825" stroke="#f9e2af" stroke-width="1.5" />
-    <text x="20" y="262" font-family="monospace" font-size="13" font-weight="bold" fill="#f9e2af">? Allow Bash to run pytest on tests/test_jwt_auth.py? (Y/n)</text>
-    <text x="20" y="285" font-family="monospace" font-size="12" fill="#6c7086">Command: pytest -v tests/test_jwt_auth.py</text>
-    <rect x="330" y="248" width="8" height="17" fill="#f9e2af" opacity="0.8" />
+    <!-- Claude Action Confirmation Prompt -->
+    <rect x="0" y="225" width="738" height="65" rx="6" fill="#181825" stroke="#f9e2af" stroke-width="1.5" />
+    <text x="20" y="250" font-family="monospace" font-size="13" font-weight="bold" fill="#f9e2af">? Allow Bash to run pytest on tests/test_auth.py? (Y/n)</text>
+    <text x="20" y="272" font-family="monospace" font-size="12" fill="#6c7086">Command: pytest -v tests/test_auth.py</text>
+    <rect x="330" y="238" width="8" height="15" fill="#f9e2af" opacity="0.8" />
   </g>
 
   <!-- Bottom Status Bar -->
   <rect x="0" y="590" width="1000" height="30" class="status-bar" />
-  <rect x="0" y="590" width="10" height="30" fill="#89b4fa" />
-  <text x="18" y="610" font-family="monospace" font-size="11" font-weight="bold" fill="#89b4fa">🤖 CLI-AGENT</text>
-  <text x="110" y="610" font-family="monospace" font-size="11" fill="#6c7086">│</text>
+  <rect x="0" y="590" width="8" height="30" fill="#89b4fa" />
+  <text x="16" y="610" font-family="monospace" font-size="11" font-weight="bold" fill="#89b4fa">🤖 CLI-AGENT</text>
+  <text x="100" y="610" font-family="monospace" font-size="11" fill="#6c7086">│</text>
 
   <!-- Status Alert in Status Bar -->
-  <rect x="125" y="594" width="220" height="22" rx="4" fill="#f9e2af" />
-  <text x="135" y="609" font-family="monospace" font-size="10" font-weight="bold" fill="#181825">🔔 ACTION REQUIRED: Backend API</text>
+  <rect x="115" y="594" width="200" height="22" rx="4" fill="#f9e2af" />
+  <text x="125" y="609" font-family="monospace" font-size="10" font-weight="bold" fill="#181825">🔔 ACTION: Backend API</text>
 
-  <text x="360" y="610" font-family="monospace" font-size="11" fill="#6c7086">│ Tab / Alt+→: Terminal │ Alt+←: Menu │ F1/F2</text>
+  <text x="325" y="610" font-family="monospace" font-size="11" fill="#6c7086">│ Tab: Terminal │ Alt+←: Menu │ M-[: Shrink │ M-]: Grow │ Drag border to resize</text>
 </svg>

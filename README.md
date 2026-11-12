@@ -21,10 +21,11 @@
 When working with CLI-based AI coding agents like **Claude Code** or **GitHub Copilot CLI**, developers often find themselves constantly switching between terminal windows, running `cd /path/to/project`, and remembering custom run commands.
 
 **CLI-Agent** solves this by turning your terminal into an integrated workspace:
-- **Left Pane (Sidebar)**: A lightweight, interactive menu listing your project bookmarks with quick shortcuts and real-time status badges.
-- **Right Pane (Terminal)**: A live interactive pseudo-terminal immediately located in the selected project folder.
-- **Instant Agent Launcher**: Press `c` to launch Claude Code, `p` for Copilot CLI, or `Enter` for your default shell in the bookmarked directory.
-- **Real-Time Notification Badges**: Automatically detects when an agent is running, done, errored, or waiting for your input (`?`, `(y/n)`, tool approvals).
+- **Truly Independent Sessions**: Each project bookmark runs in its **own isolated terminal session**. Claude Code in Project 1 continues working in the background while you switch to Project 2. No command collisions or `cd` interruptions.
+- **Compact & Resizable Sidebar**: Default slim 26-column width. Easily resize on the fly with `<` / `>` keys, `w` width presets, or by dragging the divider with your mouse.
+- **Right Pane (Terminal)**: Dedicated, full-fidelity interactive terminal for the active project.
+- **Instant Agent Launcher**: Press `c` to launch Claude Code, `p` for Copilot CLI, or `Enter` for your default shell in that project.
+- **Real-Time Notification Badges**: Automatically monitors all sessions (active & background) and alerts you when an agent needs input (`? Allow tool`, `(y/n)`), is running, finished, or hit an error.
 - **Git Awareness**: Displays live Git branches and uncommitted changes for each project at a glance.
 - **Zero External Dependencies**: Built with native Node.js and standard `tmux`. Boots up in under 50ms.
 
@@ -78,19 +79,22 @@ cli-agent
 | Shortcut | Action |
 |---|---|
 | `↑` / `↓` or `k` / `j` | Navigate project bookmarks |
-| `Enter` | Switch right terminal to selected project folder (Shell) |
-| `c` | Switch to folder & launch **Claude Code** (`claude`) |
-| `p` | Switch to folder & launch **GitHub Copilot CLI** (`copilot`) |
+| `Enter` | Switch view to selected project's independent terminal |
+| `c` | Switch to project & launch **Claude Code** (`claude`) |
+| `p` | Switch to project & launch **GitHub Copilot CLI** (`copilot`) |
 | `Space` / `o` | Open interactive agent selector modal |
 | `a` | Add a new bookmark (interactive dialog) |
 | `e` | Edit selected bookmark (Name / Path) |
-| `d` | Delete selected bookmark |
+| `d` | Delete selected bookmark & terminate its session |
 | `r` | Reset / clear status badge |
+| `<` / `>` or `[` / `]` | **Resize sidebar width** (shrink / expand by 2 cols) |
+| `w` | **Cycle width presets** (24, 30, 38 cols) |
 | `Tab` or `Alt + →` | Switch focus directly to the terminal pane |
 | `Alt + ←` or `F1` | Switch focus back to the sidebar menu |
+| `Alt + [` / `Alt + ]` | Resize sidebar from terminal pane |
 | `q` | Quit CLI-Agent cleanly |
 
-> 💡 **Mouse Support**: Mouse clicking is fully supported. You can click on any pane to switch focus or drag the vertical divider to resize the split.
+> 💡 **Mouse Support**: Mouse clicking is fully supported. You can click on any bookmark to switch sessions or drag the vertical divider border with your mouse to resize the sidebar.
 
 ---
 
