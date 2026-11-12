@@ -222,16 +222,24 @@ function detectTerminalStatus(paneOutput, procInfo) {
 }
 
 function getPaneOutputForBookmark(bookmarkId, activeId, lineCount = 35) {
-  const target = (bookmarkId === activeId)
+  const safeId = typeof bookmarkId === 'object' && bookmarkId
+    ? (bookmarkId.id || bookmarkId.name || 'default')
+    : String(bookmarkId || 'default');
+  const cleanKey = safeId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const target = (cleanKey === activeId)
     ? 'cli_agent:0.1'
-    : `cli_agent:_pane_${bookmarkId}.0`;
+    : `cli_agent:_pane_${cleanKey}.0`;
   return getPaneOutput(target, lineCount);
 }
 
 function getPaneProcessForBookmark(bookmarkId, activeId) {
-  const target = (bookmarkId === activeId)
+  const safeId = typeof bookmarkId === 'object' && bookmarkId
+    ? (bookmarkId.id || bookmarkId.name || 'default')
+    : String(bookmarkId || 'default');
+  const cleanKey = safeId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const target = (cleanKey === activeId)
     ? 'cli_agent:0.1'
-    : `cli_agent:_pane_${bookmarkId}.0`;
+    : `cli_agent:_pane_${cleanKey}.0`;
   return getPaneProcess(target);
 }
 

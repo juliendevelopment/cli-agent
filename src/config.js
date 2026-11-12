@@ -55,6 +55,27 @@ function getDefaultConfig() {
   };
 }
 
+function getBookmarkKey(bm) {
+  if (!bm) return 'default';
+  const raw = bm.id || bm.name || 'default';
+  return String(raw).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function ensureBookmarkIds(config) {
+  if (!config || !Array.isArray(config.bookmarks)) return config;
+  let changed = false;
+  config.bookmarks.forEach((bm, i) => {
+    if (!bm.id) {
+      bm.id = 'bm_' + i + '_' + Date.now().toString(36);
+      changed = true;
+    }
+  });
+  if (changed) {
+    saveConfig(config);
+  }
+  return config;
+}
+
 function loadConfig() {
   const file = getConfigFile();
   try {
@@ -64,7 +85,7 @@ function loadConfig() {
       if (!Array.isArray(parsed.bookmarks)) {
         parsed.bookmarks = [];
       }
-      return parsed;
+      return ensureBookmarkIds(parsed);
     }
   } catch (err) {
     // Return default on parse failure
@@ -168,6 +189,7 @@ module.exports = {
   getConfigFile,
   resolvePath,
   shrinkPath,
+  getBookmarkKey,
   loadConfig,
   saveConfig,
   addBookmark,

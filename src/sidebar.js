@@ -4,9 +4,11 @@ const path = require('path');
 const {
   loadConfig,
   saveConfig,
+  getConfigFile,
   addBookmark,
   removeBookmark,
   updateBookmark,
+  getBookmarkKey,
   resolvePath,
   shrinkPath
 } = require('./config');
@@ -57,6 +59,7 @@ class SidebarApp {
     this.gitInfoCache = {};
     this.lastGitCheck = 0;
     this.hasActiveAlert = false;
+    this.lastActiveId = null;
 
     // Track width presets: 24, 30, 38
     this.widthPresets = [24, 30, 38];
@@ -88,12 +91,25 @@ class SidebarApp {
       showCursor();
       process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1006l');
       if (this.monitorTimer) clearInterval(this.monitorTimer);
+      if (this.configWatcher) this.configWatcher.close();
     });
+
+    // Watch config file for external changes (e.g. from Ctrl+E popup switcher)
+    try {
+      const cfgFile = getConfigFile();
+      if (fs.existsSync(cfgFile)) {
+        this.configWatcher = fs.watch(cfgFile, () => {
+          this.runMonitorCheck(true);
+        });
+      }
+    } catch (err) {
+      // Ignore
+    }
 
     // Initialize first bookmark as active session
     const current = this.getCurrentBookmark();
     if (current) {
-      setActiveBookmarkId(current.id || current.name);
+      setActiveBookmarkId(getBookmarkKey(current));
     }
 
     // Start background monitor loop (every 1.5s)
@@ -107,11 +123,22 @@ class SidebarApp {
   runMonitorCheck(forceRender = false) {
     let changed = false;
     const manualStatuses = loadManualStatuses();
-    const activeId = getActiveBookmarkId() || (this.getCurrentBookmark() ? this.getCurrentBookmark().id : null);
+    const activeId = getActiveBookmarkId() || (this.getCurrentBookmark() ? getBookmarkKey(this.getCurrentBookmark()) : null);
+
+    // Sync selectedIndex and reload config if active session changed externally (e.g. from Ctrl+E switcher)
+    if (activeId && activeId !== this.lastActiveId) {
+      this.lastActiveId = activeId;
+      this.config = loadConfig();
+      const idx = this.config.bookmarks.findIndex(b => getBookmarkKey(b) === activeId);
+      if (idx !== -1) {
+        this.selectedIndex = idx;
+      }
+      changed = true;
+    }
 
     // 1. Analyze terminal output for all open sessions (visible + background)
     for (const bm of this.config.bookmarks) {
-      const bmId = bm.id || bm.name;
+      const bmId = getBookmarkKey(bm);
       const isOpen = (bmId === activeId) || hasBookmarkWindow(bmId);
 
       if (isOpen) {
@@ -176,12 +203,12 @@ class SidebarApp {
     try {
       if (hasAlert) {
         execSync(
-          `tmux set-option -t ${SESSION_NAME} status-right "#[bg=yellow,fg=black,bold] 🔔 ACTION REQUIRED #[default] Tab: Terminal │ Alt+←: Menu"`,
+          `tmux set-option -t ${SESSION_NAME} status-right "#[bg=yellow,fg=black,bold] 🔔 ACTION REQUIRED #[default] │ #[fg=#a6adc8]Ctrl+E: Switcher │ Alt+←: Menu#[default]"`,
           { stdio: 'ignore' }
         );
       } else {
         execSync(
-          `tmux set-option -t ${SESSION_NAME} status-right "#[fg=#a6adc8]Tab: Terminal │ Alt+←: Menu │ M-[: Shrink │ M-]: Grow #[default]"`,
+          `tmux set-option -t ${SESSION_NAME} status-right "#[fg=#a6adc8]Ctrl+E: Switcher │ Alt+←/Alt+h: Menu │ F3: Mouse #[default]"`,
           { stdio: 'ignore' }
         );
       }
@@ -343,7 +370,7 @@ class SidebarApp {
       // Reset live status
       const cur = this.getCurrentBookmark();
       if (cur) {
-        const key = cur.id || cur.name;
+        const key = getBookmarkKey(cur);
         delete this.bookmarkStatuses[key];
         saveManualStatus(key, 'idle', '');
         this.setStatus('Status reset.');
@@ -585,7 +612,7 @@ class SidebarApp {
       for (let i = startIdx; i < endIdx; i++) {
         const bm = this.config.bookmarks[i];
         const isSelected = i === this.selectedIndex;
-        const bmId = bm.id || bm.name;
+        const bmId = getBookmarkKey(bm);
         const isActiveView = bmId === activeId;
         const status = this.bookmarkStatuses[bmId] || STATUS_TYPES.IDLE;
         const git = this.gitInfoCache[bmId];

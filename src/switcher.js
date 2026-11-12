@@ -1,4 +1,4 @@
-const { loadConfig, getRecentHistory, recordActiveSession, shrinkPath } = require('./config');
+const { loadConfig, getRecentHistory, recordActiveSession, getBookmarkKey, shrinkPath } = require('./config');
 const { switchToBookmark, getActiveBookmarkId } = require('./tmux');
 const {
   STATUS_TYPES,
@@ -16,22 +16,37 @@ class SwitcherApp {
     this.recentHistory = getRecentHistory();
     this.manualStatuses = loadManualStatuses();
 
-    // Order bookmarks by recency
+    const activeId = getActiveBookmarkId();
     const ordered = [];
     const seen = new Set();
 
-    for (const id of this.recentHistory) {
-      const found = this.bookmarks.find(b => (b.id || b.name) === id);
-      if (found && !seen.has(found.id || found.name)) {
-        ordered.push(found);
-        seen.add(found.id || found.name);
+    // 1. Current active session is always first
+    if (activeId) {
+      const activeBm = this.bookmarks.find(b => getBookmarkKey(b) === activeId);
+      if (activeBm) {
+        ordered.push(activeBm);
+        seen.add(getBookmarkKey(activeBm));
       }
     }
+
+    // 2. Then sessions ordered by recent history
+    for (const id of this.recentHistory) {
+      const found = this.bookmarks.find(b => getBookmarkKey(b) === id);
+      if (found) {
+        const k = getBookmarkKey(found);
+        if (!seen.has(k)) {
+          ordered.push(found);
+          seen.add(k);
+        }
+      }
+    }
+
+    // 3. Then any remaining bookmarks
     for (const b of this.bookmarks) {
-      const key = b.id || b.name;
-      if (!seen.has(key)) {
+      const k = getBookmarkKey(b);
+      if (!seen.has(k)) {
         ordered.push(b);
-        seen.add(key);
+        seen.add(k);
       }
     }
 
@@ -125,12 +140,12 @@ class SwitcherApp {
   }
 
   getLiveStatus(bm) {
-    const key = bm.id || bm.name;
-    if (this.manualStatuses[key]) {
-      const s = this.manualStatuses[key].status;
+    const key = getBookmarkKey(bm);
+    if (this.manualStatuses[key] || this.manualStatuses[bm.name]) {
+      const s = (this.manualStatuses[key] || this.manualStatuses[bm.name]).status;
       return Object.values(STATUS_TYPES).find(t => t.id === s) || STATUS_TYPES.IDLE;
     }
-    const activeId = getActiveBookmarkId() || this.recentHistory[0];
+    const activeId = getActiveBookmarkId() || (this.items[0] ? getBookmarkKey(this.items[0]) : null);
     const paneOutput = getPaneOutputForBookmark(key, activeId, 15);
     const procInfo = getPaneProcessForBookmark(key, activeId);
     return detectTerminalStatus(paneOutput, procInfo);

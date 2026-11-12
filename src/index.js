@@ -119,7 +119,8 @@ function handleUpdate() {
 
   try {
     console.log(`${colors.gray}Downloading the latest release from GitHub...${colors.reset}`);
-    execSync(`gh api repos/juliendevelopment/cli-agent/tarball/main | tar -xz --strip-components=1 -C "${installDir}"`, { stdio: 'inherit' });
+    const downloadCmd = `curl -fsSL https://api.github.com/repos/juliendevelopment/cli-agent/tarball/main 2>/dev/null | tar -xz --strip-components=1 -C "${installDir}" || (gh api repos/juliendevelopment/cli-agent/tarball/main | tar -xz --strip-components=1 -C "${installDir}")`;
+    execSync(downloadCmd, { stdio: 'inherit' });
 
     const binFile = path.join(installDir, 'bin', 'cli-agent.js');
     if (fs.existsSync(binFile)) {

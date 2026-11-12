@@ -1,6 +1,6 @@
 const { execSync, spawnSync } = require('child_process');
 const path = require('path');
-const { recordActiveSession } = require('./config');
+const { recordActiveSession, getBookmarkKey, loadConfig, saveConfig } = require('./config');
 
 const SESSION_NAME = 'cli_agent';
 const DEFAULT_SIDEBAR_WIDTH = 26;
@@ -42,19 +42,40 @@ function runTmuxQuiet(args) {
 }
 
 function getActiveBookmarkId() {
-  return activeBookmarkId;
+  try {
+    const val = execSync(`tmux show-options -t ${SESSION_NAME} -v @active_bookmark_id 2>/dev/null`, {
+      encoding: 'utf-8'
+    }).trim();
+    if (val) return val;
+  } catch (err) {
+    // tmux session might not exist or option not set yet
+  }
+  if (activeBookmarkId) return activeBookmarkId;
+  try {
+    const cfg = loadConfig();
+    return cfg.activeBookmarkId || (cfg.bookmarks[0] ? getBookmarkKey(cfg.bookmarks[0]) : null);
+  } catch (err) {
+    return null;
+  }
 }
 
 function setActiveBookmarkId(id) {
+  if (!id) return;
   activeBookmarkId = id;
+  try {
+    execSync(`tmux set-option -t ${SESSION_NAME} @active_bookmark_id "${id}" 2>/dev/null`, { stdio: 'ignore' });
+  } catch (err) {
+    // Ignore
+  }
 }
 
-function hasBookmarkWindow(bookmarkId) {
+function hasBookmarkWindow(bookmarkKey) {
   try {
+    const safeKey = typeof bookmarkKey === 'object' ? getBookmarkKey(bookmarkKey) : String(bookmarkKey).replace(/[^a-zA-Z0-9_-]/g, '_');
     const list = execSync(`tmux list-windows -t ${SESSION_NAME} -F '#{window_name}' 2>/dev/null`, {
       encoding: 'utf-8'
     });
-    const targetName = `_pane_${bookmarkId}`;
+    const targetName = `_pane_${safeKey}`;
     return list.split('\n').map(s => s.trim()).includes(targetName);
   } catch (err) {
     return false;
@@ -63,8 +84,8 @@ function hasBookmarkWindow(bookmarkId) {
 
 function switchToBookmark(targetBookmark, agentCommand = '', focus = true) {
   if (!targetBookmark) return;
-  const targetId = targetBookmark.id || targetBookmark.name;
-  const currentId = activeBookmarkId;
+  const targetId = getBookmarkKey(targetBookmark);
+  const currentId = getActiveBookmarkId();
   const shellCmd = process.env.SHELL || '/bin/bash';
 
   // If already visible in the right pane:
@@ -85,44 +106,53 @@ function switchToBookmark(targetBookmark, agentCommand = '', focus = true) {
         `tmux new-window -d -t ${SESSION_NAME} -n "_pane_${targetId}" -c "${targetBookmark.path}" "${shellCmd}"`,
         { stdio: 'ignore' }
       );
-      if (agentCommand && agentCommand.trim()) {
-        execSync(
-          `tmux send-keys -t ${SESSION_NAME}:_pane_${targetId}.0 '${agentCommand.trim()}' C-m`,
-          { stdio: 'ignore' }
-        );
-      }
-    } else if (agentCommand && agentCommand.trim()) {
-      // Already existed, send requested command
-      execSync(
-        `tmux send-keys -t ${SESSION_NAME}:_pane_${targetId}.0 '${agentCommand.trim()}' C-m`,
-        { stdio: 'ignore' }
-      );
     }
 
     // 2. Swap visible right pane (0.1) with background window _pane_${targetId}.0
     execSync(`tmux swap-pane -s ${SESSION_NAME}:0.1 -t ${SESSION_NAME}:_pane_${targetId}.0`, { stdio: 'ignore' });
 
-    // 3. Rename the background window (which now holds currentId's pane)
-    execSync(`tmux rename-window -t ${SESSION_NAME}:_pane_${targetId} "_pane_${currentId}"`, { stdio: 'ignore' });
-  } else {
-    // Initial launch (targetId becomes the active one in pane 0.1)
-    if (agentCommand && agentCommand.trim()) {
-      execSync(`tmux send-keys -t ${SESSION_NAME}:0.1 '${agentCommand.trim()}' C-m`, { stdio: 'ignore' });
+    // 3. Remove stale currentId window if any to avoid duplicate name collision
+    if (hasBookmarkWindow(currentId)) {
+      try {
+        execSync(`tmux kill-window -t ${SESSION_NAME}:_pane_${currentId}`, { stdio: 'ignore' });
+      } catch (err) {}
     }
+
+    // 4. Rename background window (which now holds currentId's pane)
+    execSync(`tmux rename-window -t ${SESSION_NAME}:_pane_${targetId} "_pane_${currentId}"`, { stdio: 'ignore' });
   }
 
-  activeBookmarkId = targetId;
+  // 5. Send command to the active visible pane if requested
+  if (agentCommand && agentCommand.trim()) {
+    execSync(`tmux send-keys -t ${SESSION_NAME}:0.1 '${agentCommand.trim()}' C-m`, { stdio: 'ignore' });
+  }
+
+  // 6. Update active bookmark state in tmux and in config
+  setActiveBookmarkId(targetId);
   recordActiveSession(targetId);
+
+  // 7. Synchronize selectedIndex in config so sidebar cursor matches
+  try {
+    const cfg = loadConfig();
+    const idx = cfg.bookmarks.findIndex(b => getBookmarkKey(b) === targetId);
+    if (idx !== -1 && cfg.selectedIndex !== idx) {
+      cfg.selectedIndex = idx;
+      saveConfig(cfg);
+    }
+  } catch (err) {}
 
   if (focus) {
     focusPane(1);
   }
 }
 
-function closeBookmarkSession(bookmarkId) {
+function closeBookmarkSession(bookmarkKeyOrObj) {
   try {
-    if (hasBookmarkWindow(bookmarkId)) {
-      execSync(`tmux kill-window -t ${SESSION_NAME}:_pane_${bookmarkId}`, { stdio: 'ignore' });
+    const key = typeof bookmarkKeyOrObj === 'object'
+      ? getBookmarkKey(bookmarkKeyOrObj)
+      : String(bookmarkKeyOrObj).replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (hasBookmarkWindow(key)) {
+      execSync(`tmux kill-window -t ${SESSION_NAME}:_pane_${key}`, { stdio: 'ignore' });
     }
   } catch (err) {
     // Ignore
@@ -186,8 +216,9 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
   }
 
   const sidebarCmd = `${nodeBin} "${sidebarScript}" --sidebar`;
-  const initialDir = initialBookmark ? initialBookmark.path : process.cwd();
-  const initialId = initialBookmark ? (initialBookmark.id || initialBookmark.name) : 'default';
+  const initialBookmarkObj = initialBookmark || (loadConfig().bookmarks[0] || null);
+  const initialDir = initialBookmarkObj ? initialBookmarkObj.path : process.cwd();
+  const initialId = getBookmarkKey(initialBookmarkObj);
 
   // 1. Create detached session running sidebar in pane 0
   execSync(`tmux new-session -d -s ${SESSION_NAME} -n "CLI-Agent" '${sidebarCmd}'`);
