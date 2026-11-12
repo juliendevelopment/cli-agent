@@ -94,7 +94,10 @@ cli-agent
 | `Alt + [` / `Alt + ]` | Resize sidebar from terminal pane |
 | `q` | Quit CLI-Agent cleanly |
 
-> 💡 **Mouse Support**: Mouse clicking is fully supported. You can click on any bookmark to switch sessions or drag the vertical divider border with your mouse to resize the sidebar.
+> 💡 **Mouse Support & Text Selection**:
+> - **Hold `Shift` + Drag to Select**: Holding `Shift` while dragging your mouse lets your host terminal emulator select text natively, bypassing tmux mouse capture. Then press `Ctrl + Shift + C` (or Cmd+C on macOS) or right-click to copy.
+> - **Auto-Copy on Mouse Release**: Releasing the mouse after dragging text automatically pipes the selection into your system clipboard via OSC 52, `wl-copy`, `xclip`, or `pbcopy`.
+> - **Press `F3` to Toggle Mouse Capture**: Press `F3` at any time to turn mouse capture OFF (for regular full-window text selection without Shift), and press `F3` again to turn it back ON for resizing and clicking.
 
 ---
 

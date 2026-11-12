@@ -196,14 +196,29 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
   // 3. Set sidebar width (compact by default: e.g. 26 columns)
   execSync(`tmux resize-pane -t ${SESSION_NAME}:0.0 -x ${initialWidth}`);
 
-  // 4. Configure mouse, borders, and status line
+  // 4. Configure mouse, clipboard, borders, and status line
   execSync(`tmux set-option -t ${SESSION_NAME} mouse on`);
+  execSync(`tmux set-option -s set-clipboard on`);
+
+  // Automatically pipe mouse drag selections into system clipboard (Wayland / X11 / macOS / OSC 52)
+  const clipCmd = 'wl-copy 2>/dev/null || xclip -in -selection clipboard 2>/dev/null || pbcopy 2>/dev/null || true';
+  try {
+    execSync(`tmux bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "${clipCmd}"`);
+    execSync(`tmux bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "${clipCmd}"`);
+    execSync(`tmux bind-key -T copy-mode-vi DoubleClick1Pane select-pane \\; send-keys -X select-word \\; send-keys -X copy-pipe-and-cancel "${clipCmd}"`);
+    execSync(`tmux bind-key -T copy-mode DoubleClick1Pane select-pane \\; send-keys -X select-word \\; send-keys -X copy-pipe-and-cancel "${clipCmd}"`);
+    execSync(`tmux bind-key -T copy-mode-vi TripleClick1Pane select-pane \\; send-keys -X select-line \\; send-keys -X copy-pipe-and-cancel "${clipCmd}"`);
+    execSync(`tmux bind-key -T copy-mode TripleClick1Pane select-pane \\; send-keys -X select-line \\; send-keys -X copy-pipe-and-cancel "${clipCmd}"`);
+  } catch (err) {
+    // Ignore binding failures on older tmux versions
+  }
+
   execSync(`tmux set-option -t ${SESSION_NAME} status on`);
   execSync(`tmux set-option -t ${SESSION_NAME} status-style "bg=#1e1e2e,fg=#cdd6f4"`);
   execSync(`tmux set-option -t ${SESSION_NAME} status-left "#[bold,fg=#89b4fa] 🤖 CLI-AGENT #[default]│ "`);
   execSync(`tmux set-option -t ${SESSION_NAME} status-left-length 30`);
   execSync(
-    `tmux set-option -t ${SESSION_NAME} status-right "#[fg=#a6adc8]Tab: Terminal │ Alt+←: Menu │ M-[: Shrink │ M-]: Grow #[default]"`
+    `tmux set-option -t ${SESSION_NAME} status-right "#[fg=#a6adc8]Tab: Term │ Alt+←: Menu │ Shift+Drag: Copy │ F3: Mouse #[default]"`
   );
   execSync(`tmux set-option -t ${SESSION_NAME} pane-border-style "fg=#313244"`);
   execSync(`tmux set-option -t ${SESSION_NAME} pane-active-border-style "fg=#89b4fa"`);
@@ -213,6 +228,7 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
   execSync(`tmux bind-key -n M-Right select-pane -t ${SESSION_NAME}:0.1`);
   execSync(`tmux bind-key -n F1 select-pane -t ${SESSION_NAME}:0.0`);
   execSync(`tmux bind-key -n F2 select-pane -t ${SESSION_NAME}:0.1`);
+  execSync(`tmux bind-key -n F3 set-option -g mouse`); // Toggle mouse on/off for easy native selection
   execSync(`tmux bind-key -n M-[ resize-pane -t ${SESSION_NAME}:0.0 -L 3`);
   execSync(`tmux bind-key -n M-] resize-pane -t ${SESSION_NAME}:0.0 -R 3`);
 

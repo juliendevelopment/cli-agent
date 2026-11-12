@@ -59,6 +59,15 @@ fi
 TMUX_VERSION=$(tmux -V)
 echo -e "${C_GREEN}✓${C_RESET} tmux detected (${TMUX_VERSION})"
 
+# Optional: Clipboard tool helper (xclip / wl-clipboard) for Linux
+if ! command -v wl-copy >/dev/null 2>&1 && ! command -v xclip >/dev/null 2>&1 && ! command -v pbcopy >/dev/null 2>&1; then
+    if command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y wl-clipboard xclip >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y wl-clipboard xclip >/dev/null 2>&1 || true
+    fi
+fi
+
 # 3. Create destination directories
 mkdir -p "${INSTALL_DIR}"
 mkdir -p "${BIN_DIR}"
