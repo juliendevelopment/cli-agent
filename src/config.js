@@ -37,6 +37,7 @@ function getDefaultConfig() {
   return {
     version: 1,
     selectedIndex: 0,
+    sidebarWidth: 26,
     bookmarks: [
       {
         id: 'default-1',

@@ -74,7 +74,13 @@ class SidebarApp {
     process.stdout.write('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
 
     process.stdin.on('data', chunk => this.handleInput(chunk));
-    process.stdout.on('resize', () => this.render());
+    process.stdout.on('resize', () => {
+      const currentWidth = process.stdout.columns;
+      if (currentWidth && currentWidth >= 16) {
+        this.persistSidebarWidth(currentWidth);
+      }
+      this.render();
+    });
 
     process.on('SIGINT', () => this.exit());
     process.on('SIGTERM', () => this.exit());
@@ -196,8 +202,36 @@ class SidebarApp {
     this.render();
   }
 
+  persistSidebarWidth(width) {
+    if (this.saveWidthTimer) clearTimeout(this.saveWidthTimer);
+    this.saveWidthTimer = setTimeout(() => {
+      try {
+        const config = loadConfig();
+        if (config.sidebarWidth !== width) {
+          config.sidebarWidth = width;
+          saveConfig(config);
+        }
+      } catch (err) {
+        // Ignore
+      }
+    }, 250);
+  }
+
   exit() {
     if (this.monitorTimer) clearInterval(this.monitorTimer);
+    if (this.saveWidthTimer) clearTimeout(this.saveWidthTimer);
+
+    try {
+      const currentWidth = process.stdout.columns;
+      if (currentWidth && currentWidth >= 16) {
+        const config = loadConfig();
+        config.sidebarWidth = currentWidth;
+        saveConfig(config);
+      }
+    } catch (err) {
+      // Ignore
+    }
+
     showCursor();
     process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[2J\x1b[H');
     killSession(SESSION_NAME);
