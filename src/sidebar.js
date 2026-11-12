@@ -76,13 +76,13 @@ class SidebarApp {
     // Enable SGR mouse tracking
     process.stdout.write('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
 
+    // Ensure sidebar has the exact desired width initially
+    const desiredWidth = Math.max(16, Math.min(60, this.config.sidebarWidth || 26));
+    setSidebarWidth(desiredWidth);
+
     process.stdin.on('data', chunk => this.handleInput(chunk));
     process.stdout.on('resize', () => {
-      const currentWidth = process.stdout.columns;
-      if (currentWidth && currentWidth >= 16) {
-        this.persistSidebarWidth(currentWidth);
-      }
-      this.render();
+      this.handleResize();
     });
 
     process.on('SIGINT', () => this.exit());
@@ -122,6 +122,19 @@ class SidebarApp {
 
   runMonitorCheck(forceRender = false) {
     let changed = false;
+
+    // Detect if right terminal pane was closed by user (e.g. typed exit)
+    try {
+      const panesStr = execSync(
+        `tmux display-message -p -t ${SESSION_NAME}:0 '#{window_panes}' 2>/dev/null`,
+        { encoding: 'utf-8' }
+      ).trim();
+      if (parseInt(panesStr, 10) < 2) {
+        this.exit();
+        return;
+      }
+    } catch (err) {}
+
     const manualStatuses = loadManualStatuses();
     const activeId = getActiveBookmarkId() || (this.getCurrentBookmark() ? getBookmarkKey(this.getCurrentBookmark()) : null);
 
@@ -229,7 +242,49 @@ class SidebarApp {
     this.render();
   }
 
+  getRealSidebarWidth() {
+    try {
+      const panesStr = execSync(
+        `tmux display-message -p -t ${SESSION_NAME}:0 '#{window_panes}' 2>/dev/null`,
+        { encoding: 'utf-8' }
+      ).trim();
+      const panesCount = parseInt(panesStr, 10);
+      if (panesCount < 2) {
+        return null;
+      }
+
+      const pWidthStr = execSync(
+        `tmux display-message -p -t ${SESSION_NAME}:0.0 '#{pane_width}' 2>/dev/null`,
+        { encoding: 'utf-8' }
+      ).trim();
+      const paneWidth = parseInt(pWidthStr, 10);
+
+      const wWidthStr = execSync(
+        `tmux display-message -p -t ${SESSION_NAME}:0 '#{window_width}' 2>/dev/null`,
+        { encoding: 'utf-8' }
+      ).trim();
+      const winWidth = parseInt(wWidthStr, 10);
+
+      // Validate: must be a legitimate split sidebar (16-60 cols, at most 50% of window)
+      if (paneWidth >= 16 && paneWidth <= 60 && (!winWidth || paneWidth <= Math.floor(winWidth * 0.5))) {
+        return paneWidth;
+      }
+    } catch (err) {
+      // Ignore
+    }
+    return null;
+  }
+
+  handleResize() {
+    const realWidth = this.getRealSidebarWidth();
+    if (realWidth) {
+      this.persistSidebarWidth(realWidth);
+    }
+    this.render();
+  }
+
   persistSidebarWidth(width) {
+    if (!width || width < 16 || width > 60) return;
     if (this.saveWidthTimer) clearTimeout(this.saveWidthTimer);
     this.saveWidthTimer = setTimeout(() => {
       try {
@@ -241,22 +296,22 @@ class SidebarApp {
       } catch (err) {
         // Ignore
       }
-    }, 250);
+    }, 200);
   }
 
   exit() {
     if (this.monitorTimer) clearInterval(this.monitorTimer);
     if (this.saveWidthTimer) clearTimeout(this.saveWidthTimer);
 
-    try {
-      const currentWidth = process.stdout.columns;
-      if (currentWidth && currentWidth >= 16) {
+    const realWidth = this.getRealSidebarWidth();
+    if (realWidth) {
+      try {
         const config = loadConfig();
-        config.sidebarWidth = currentWidth;
+        config.sidebarWidth = realWidth;
         saveConfig(config);
+      } catch (err) {
+        // Ignore
       }
-    } catch (err) {
-      // Ignore
     }
 
     showCursor();
@@ -379,13 +434,18 @@ class SidebarApp {
     } else if (key === '<' || key === '[' || key === '-') {
       // Shrink sidebar width
       resizeSidebar(-2);
+      setTimeout(() => this.handleResize(), 60);
     } else if (key === '>' || key === ']' || key === '+') {
       // Expand sidebar width
       resizeSidebar(2);
+      setTimeout(() => this.handleResize(), 60);
     } else if (key === 'w' || key === 'W') {
       // Cycle width presets
       this.widthPresetIndex = (this.widthPresetIndex + 1) % this.widthPresets.length;
-      setSidebarWidth(this.widthPresets[this.widthPresetIndex]);
+      const targetWidth = this.widthPresets[this.widthPresetIndex];
+      setSidebarWidth(targetWidth);
+      this.persistSidebarWidth(targetWidth);
+      this.setStatus(`Sidebar: ${targetWidth} cols`);
     } else if (key === '\t' || key === '\u001b[C') {
       // Tab or Right Arrow: focus right terminal pane
       focusPane(1);

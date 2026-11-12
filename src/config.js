@@ -70,6 +70,18 @@ function ensureBookmarkIds(config) {
       changed = true;
     }
   });
+
+  // Clamp sidebarWidth to sane bounds [16, 60] (auto-heals corrupt 80 columns)
+  if (typeof config.sidebarWidth === 'number') {
+    if (config.sidebarWidth > 60 || config.sidebarWidth < 16) {
+      config.sidebarWidth = 26;
+      changed = true;
+    }
+  } else {
+    config.sidebarWidth = 26;
+    changed = true;
+  }
+
   if (changed) {
     saveConfig(config);
   }

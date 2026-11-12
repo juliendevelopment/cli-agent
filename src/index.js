@@ -191,7 +191,7 @@ function main() {
     // Launch workspace
     const config = loadConfig();
     const defaultBm = config.bookmarks[config.selectedIndex || 0];
-    const initialWidth = config.sidebarWidth || 26;
+    const initialWidth = Math.max(16, Math.min(60, config.sidebarWidth || 26));
     const entrypoint = path.resolve(__dirname, '..', 'bin', 'cli-agent.js');
     startWorkspace({ initialBookmark: defaultBm, scriptPath: entrypoint, initialWidth });
     return;

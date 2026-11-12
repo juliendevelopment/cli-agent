@@ -215,21 +215,32 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
     return;
   }
 
-  const sidebarCmd = `${nodeBin} "${sidebarScript}" --sidebar`;
+  const envPrefix = process.env.XDG_CONFIG_HOME ? `XDG_CONFIG_HOME="${process.env.XDG_CONFIG_HOME}" ` : '';
+  const sidebarCmd = `${envPrefix}${nodeBin} "${sidebarScript}" --sidebar`;
   const initialBookmarkObj = initialBookmark || (loadConfig().bookmarks[0] || null);
   const initialDir = initialBookmarkObj ? initialBookmarkObj.path : process.cwd();
   const initialId = getBookmarkKey(initialBookmarkObj);
+  const safeWidth = Math.max(16, Math.min(60, initialWidth || DEFAULT_SIDEBAR_WIDTH));
 
-  // 1. Create detached session running sidebar in pane 0
-  execSync(`tmux new-session -d -s ${SESSION_NAME} -n "CLI-Agent" '${sidebarCmd}'`);
+  // Determine current terminal columns and rows so detached session matches client screen size
+  const termCols = (process.stdout.columns && process.stdout.columns >= 40) ? process.stdout.columns : 180;
+  const termRows = (process.stdout.rows && process.stdout.rows >= 10) ? process.stdout.rows : 40;
+
+  // 1. Create detached session running sidebar in pane 0 with actual terminal dimensions
+  execSync(`tmux new-session -d -s ${SESSION_NAME} -n "CLI-Agent" -x ${termCols} -y ${termRows} '${sidebarCmd}'`);
 
   // 2. Split horizontally: pane 1 on the right running shell in initialDir
   execSync(`tmux split-window -h -t ${SESSION_NAME}:0.0 -c "${initialDir}" "${shellCmd}"`);
 
-  // 3. Set sidebar width (compact by default: e.g. 26 columns)
-  execSync(`tmux resize-pane -t ${SESSION_NAME}:0.0 -x ${initialWidth}`);
+  // 3. Set sidebar width (e.g. 26 columns or user-saved width)
+  execSync(`tmux resize-pane -t ${SESSION_NAME}:0.0 -x ${safeWidth}`);
 
-  // 4. Configure mouse, clipboard, borders, and status line
+  // 4. Pin sidebar width when client attaches to prevent tmux auto-expand
+  try {
+    execSync(`tmux set-hook -t ${SESSION_NAME} client-attached "resize-pane -t ${SESSION_NAME}:0.0 -x ${safeWidth}"`);
+  } catch (err) {}
+
+  // 5. Configure mouse, clipboard, borders, and status line
   execSync(`tmux set-option -t ${SESSION_NAME} mouse on`);
   execSync(`tmux set-option -s set-clipboard on`);
 
@@ -257,7 +268,7 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
   execSync(`tmux set-option -t ${SESSION_NAME} pane-active-border-style "fg=#89b4fa"`);
 
   // 5. Quick navigation, switcher & resize bindings
-  const switcherCmd = `display-popup -w 56 -h 15 -b rounded -s "bg=#1e1e2e,fg=#cdd6f4" -S "fg=#89b4fa" -T " Recent Sessions (Ctrl+E) " -E '${nodeBin} "${sidebarScript}" --switcher'`;
+  const switcherCmd = `display-popup -w 56 -h 15 -b rounded -s "bg=#1e1e2e,fg=#cdd6f4" -S "fg=#89b4fa" -T " Recent Sessions (Ctrl+E) " -E '${envPrefix}${nodeBin} "${sidebarScript}" --switcher'`;
   execSync(`tmux bind-key -n C-e ${switcherCmd}`);
   execSync(`tmux bind-key -n M-e ${switcherCmd}`);
 
