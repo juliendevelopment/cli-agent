@@ -162,44 +162,40 @@ function detectTerminalStatus(paneOutput, procInfo) {
 
   const clean = stripAnsi(paneOutput);
   const lines = clean.split('\n').map(l => l.trim()).filter(Boolean);
-  const recentLines = lines.slice(-15);
-  const recentText = recentLines.join(' \n ');
+  if (lines.length === 0) return STATUS_TYPES.IDLE;
 
-  // 1. Check for Rate Limit
+  const recentLines = lines.slice(-5);
+  const recentBottomText = recentLines.join('\n');
+  const fullRecent = lines.slice(-15).join('\n');
+
+  // 1. Check for Rate Limit / Quota warnings
   if (
-    /rate limit reached|quota exceeded|too many requests|please wait \d+s/i.test(recentText)
+    /rate limit reached|quota exceeded|too many requests|please wait \d+s/i.test(fullRecent)
   ) {
     return STATUS_TYPES.RATE_LIMIT;
   }
 
-  // 2. Check for Input Required / User Action
-  const inputPatterns = [
-    /\?\s+[A-Z]/,                         // Inquirer / Clack / Claude prompt (e.g. "? Allow bash to run")
-    /\([yY]\/[nN]\)|\[[yY]\/[nN]\]/,      // (y/n) or [y/N]
-    /waiting for (user|input)/i,
-    /(allow|approve|confirm)\s+(tool|command|execution|action)/i,
-    /do you want to (continue|proceed|run)/i,
-    /type.*to confirm/i,
-    /press enter to/i,
-    /enter your (choice|prompt|input)/i,
-    /select (one|an option)/i
-  ];
+  // 2. Real confirmation prompt waiting on the active bottom lines
+  const isActionRequired = recentLines.some(line => {
+    // Check if line starts with question prompt or ends with (y/n)
+    if (/^\s*\?\s+(allow|approve|do you want|would you like|execute|run|confirm|select|proceed)/i.test(line)) return true;
+    if (/\((y\/n|yes\/no)\)\s*$/i.test(line) || /\[(y\/n|y\/N|Y\/n)\]\s*$/i.test(line)) return true;
+    if (/waiting for (user|confirmation|approval|input)/i.test(line)) return true;
+    return false;
+  });
 
-  for (const pat of inputPatterns) {
-    if (pat.test(recentText)) {
-      return STATUS_TYPES.INPUT_REQUIRED;
-    }
+  if (isActionRequired) {
+    return STATUS_TYPES.INPUT_REQUIRED;
   }
 
-  // 3. Check for Active Running Agent
-  if (procInfo && procInfo.isAgent) {
-    // If agent is active and running
-    if (/thinking\.\.\.|generating|searching|running command|executing/i.test(recentText)) {
-      return STATUS_TYPES.RUNNING;
-    }
+  // 3. Task Completion (Claude Code "· done 9:12 PM", "done in 2s", "Task complete", etc.)
+  if (
+    /·\s*done\b|done\s+\d+:\d+|done in \d+|completed successfully|task complete|\bcost:\s*\$|\btokens:\s*\d+/i.test(fullRecent)
+  ) {
+    return STATUS_TYPES.DONE;
   }
 
-  // 4. Check for Errors
+  // 4. Errors in recent lines
   const errorPatterns = [
     /fatal:\s+/i,
     /command failed/i,
@@ -210,20 +206,16 @@ function detectTerminalStatus(paneOutput, procInfo) {
   ];
 
   for (const pat of errorPatterns) {
-    if (pat.test(recentLines.slice(-6).join(' '))) {
+    if (pat.test(recentLines.slice(-3).join(' '))) {
       return STATUS_TYPES.ERROR;
     }
   }
 
-  // 5. Check for Task Completion
-  if (
-    /task complete|done in \d+|completed successfully|tokens:.*cost:/i.test(recentText)
-  ) {
-    return STATUS_TYPES.DONE;
-  }
-
+  // 5. Active running agent (Claude Code / Copilot actively thinking or executing)
   if (procInfo && procInfo.isAgent) {
-    return STATUS_TYPES.RUNNING;
+    if (/thinking\.\.\.|saut[ée]ing|cooking|brewing|generating|executing|searching|reading|editing/i.test(recentBottomText)) {
+      return STATUS_TYPES.RUNNING;
+    }
   }
 
   return STATUS_TYPES.IDLE;
