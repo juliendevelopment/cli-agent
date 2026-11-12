@@ -6,7 +6,7 @@ set -e
 #   curl -fsSL https://raw.githubusercontent.com/juliendevelopment/cli-agent/main/install.sh | bash
 #   or locally: ./install.sh
 
-REPO_URL="https://github.com/juliendevelopment/cli-agent.git"
+REPO="juliendevelopment/cli-agent"
 INSTALL_DIR="${HOME}/.cli-agent"
 BIN_DIR="${HOME}/.local/bin"
 
@@ -41,7 +41,7 @@ echo -e "${C_GREEN}✓${C_RESET} Node.js detected (${NODE_VERSION})"
 
 # 2. Check Tmux
 if ! command -v tmux >/dev/null 2>&1; then
-    echo -e "${C_YELLOW}⚠️ tmux is not installed. Attempting installation...${C_RESET}"
+    echo -e "${C_YELLOW}⚠️ tmux is not installed. Installing it with your package manager (may ask for your sudo password)...${C_RESET}"
     if command -v dnf >/dev/null 2>&1; then
         sudo dnf install -y tmux
     elif command -v apt-get >/dev/null 2>&1; then
@@ -59,13 +59,17 @@ fi
 TMUX_VERSION=$(tmux -V)
 echo -e "${C_GREEN}✓${C_RESET} tmux detected (${TMUX_VERSION})"
 
-# Optional: Clipboard tool helper (xclip / wl-clipboard) for Linux
+# The quick switcher popup needs tmux >= 3.2
+TMUX_MAJOR=$(echo "${TMUX_VERSION}" | sed -E 's/[^0-9]*([0-9]+)\.([0-9]+).*/\1/')
+TMUX_MINOR=$(echo "${TMUX_VERSION}" | sed -E 's/[^0-9]*([0-9]+)\.([0-9]+).*/\2/')
+if [ -n "${TMUX_MAJOR}" ] && { [ "${TMUX_MAJOR}" -lt 3 ] || { [ "${TMUX_MAJOR}" -eq 3 ] && [ "${TMUX_MINOR}" -lt 2 ]; }; }; then
+    echo -e "${C_YELLOW}⚠️ tmux >= 3.2 is recommended (the Ctrl+E switcher popup will not work).${C_RESET}"
+fi
+
+# Optional: clipboard tool (never installed silently)
 if ! command -v wl-copy >/dev/null 2>&1 && ! command -v xclip >/dev/null 2>&1 && ! command -v pbcopy >/dev/null 2>&1; then
-    if command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y wl-clipboard xclip >/dev/null 2>&1 || true
-    elif command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get install -y wl-clipboard xclip >/dev/null 2>&1 || true
-    fi
+    echo -e "${C_YELLOW}ℹ️  No clipboard tool found. Mouse selections will rely on OSC 52 only.${C_RESET}"
+    echo -e "${C_GRAY}   Optional: install wl-clipboard (Wayland) or xclip (X11) with your package manager.${C_RESET}"
 fi
 
 # 3. Create destination directories
@@ -79,12 +83,14 @@ if [ -f "${SCRIPT_DIR}/bin/cli-agent.js" ] && [ "${SCRIPT_DIR}" != "${INSTALL_DI
     echo -e "${C_CYAN}📦 Installing from local source files...${C_RESET}"
     cp -r "${SCRIPT_DIR}"/* "${INSTALL_DIR}/"
 else
-    echo -e "${C_CYAN}📦 Downloading latest release from GitHub...${C_RESET}"
-    if command -v gh >/dev/null 2>&1; then
-        gh api repos/juliendevelopment/cli-agent/tarball/main | tar -xz --strip-components=1 -C "${INSTALL_DIR}"
-    else
-        curl -fsSL https://api.github.com/repos/juliendevelopment/cli-agent/tarball/main | tar -xz --strip-components=1 -C "${INSTALL_DIR}"
+    # Latest tagged release, falling back to main when none is published yet
+    TARBALL_URL=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tarball_url": *"\([^"]*\)".*/\1/p' | head -n 1 || true)
+    if [ -z "${TARBALL_URL}" ]; then
+        TARBALL_URL="https://api.github.com/repos/${REPO}/tarball/main"
     fi
+    echo -e "${C_CYAN}📦 Downloading ${TARBALL_URL##*/}...${C_RESET}"
+    curl -fsSL "${TARBALL_URL}" | tar -xz --strip-components=1 -C "${INSTALL_DIR}"
 fi
 
 # 5. Make executable & create symlink
@@ -100,6 +106,7 @@ if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
         if [ -f "${rc}" ]; then
             if ! grep -q 'export PATH=.*\.local/bin' "${rc}"; then
                 echo 'export PATH="$HOME/.local/bin:$PATH"' >> "${rc}"
+                echo -e "${C_GREEN}✓${C_RESET} Added ~/.local/bin to PATH in ${rc}"
                 PATH_UPDATED=1
             fi
         fi
