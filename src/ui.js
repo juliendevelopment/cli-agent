@@ -72,6 +72,15 @@ function moveTo(row, col) {
   process.stdout.write(`${esc}${row};${col}H`);
 }
 
+/**
+ * Redraw the screen without flicker: move home, overwrite each line, clear the
+ * rest of every line and everything below the last one.
+ */
+function paint(lines) {
+  const body = lines.map(line => `${line}${esc}0m${esc}K`).join('\r\n');
+  process.stdout.write(`${esc}H${body}${esc}J`);
+}
+
 module.exports = {
   colors,
   stripAnsi,
@@ -82,5 +91,6 @@ module.exports = {
   clearScreen,
   hideCursor,
   showCursor,
-  moveTo
+  moveTo,
+  paint
 };

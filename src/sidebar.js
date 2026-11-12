@@ -1,50 +1,59 @@
-const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
 const {
   loadConfig,
-  saveConfig,
-  getConfigFile,
+  updateConfig,
+  getConfigDir,
   addBookmark,
   removeBookmark,
   updateBookmark,
   getBookmarkKey,
   resolvePath,
-  shrinkPath
+  shrinkPath,
+  clampWidth
 } = require('./config');
-const { getAgentsWithStatus, resolveAgent } = require('./agents');
+const { getAgentsWithStatus, getAgentProcessNames } = require('./agents');
 const {
-  SESSION_NAME,
   switchToBookmark,
   closeBookmarkSession,
   getActiveBookmarkId,
   setActiveBookmarkId,
-  hasBookmarkWindow,
+  getMainWindowPaneCount,
+  respawnTerminalPane,
   resizeSidebar,
   setSidebarWidth,
+  getPaneWidths,
   focusPane,
+  setStatusRight,
+  statusRight,
   killSession
 } = require('./tmux');
 const {
   STATUS_TYPES,
+  statusBadge,
   loadManualStatuses,
-  saveManualStatus,
-  getGitInfo,
-  getPaneOutputForBookmark,
-  getPaneProcessForBookmark,
+  clearManualStatus,
+  getManualStatus,
+  resolveStatus,
+  getSessionPanes,
+  capturePane,
+  procInfoFromPane,
+  getGitInfoAsync,
   detectTerminalStatus
 } = require('./monitor');
-const { colors, truncate, padRight, drawLine, clearScreen, hideCursor, showCursor, moveTo, stripAnsi } = require('./ui');
-const { execSync } = require('child_process');
+const { colors, truncate, drawLine, paint, hideCursor, showCursor, visibleLength } = require('./ui');
+const { VERSION } = require('./version');
+
+const MONITOR_INTERVAL_MS = 1500;
+const GIT_INTERVAL_MS = 6000;
+const MOUSE_ON = '\x1b[?1000h\x1b[?1002h\x1b[?1006h';
+const MOUSE_OFF = '\x1b[?1000l\x1b[?1002l\x1b[?1006l';
 
 class SidebarApp {
   constructor() {
     this.config = loadConfig();
-    this.selectedIndex = Math.min(
-      Math.max(0, this.config.selectedIndex || 0),
-      Math.max(0, this.config.bookmarks.length - 1)
-    );
-    this.mode = 'normal'; // 'normal' | 'add' | 'edit' | 'delete_confirm' | 'select_agent' | 'quit_confirm'
+    this.selectedIndex = this.clampIndex(this.config.selectedIndex || 0);
+    this.mode = 'normal'; // normal | add | edit | delete_confirm | select_agent | quit_confirm
     this.inputPrompt = '';
     this.inputValue = '';
     this.inputStep = 0;
@@ -52,19 +61,23 @@ class SidebarApp {
     this.statusMessage = '';
     this.statusTimer = null;
     this.monitorTimer = null;
-    this.agents = getAgentsWithStatus();
+    this.reloadAgents();
 
-    // Cache of statuses & git info
     this.bookmarkStatuses = {};
     this.gitInfoCache = {};
     this.lastGitCheck = 0;
+    this.gitInFlight = 0;
     this.hasActiveAlert = false;
     this.lastActiveId = null;
+    this.rowMap = {};
 
-    // Track width presets: 24, 30, 38
     this.widthPresets = [24, 30, 38];
     this.widthPresetIndex = 0;
   }
+
+  // -------------------------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------------------------
 
   start() {
     process.stdin.setRawMode(true);
@@ -72,163 +85,185 @@ class SidebarApp {
     process.stdin.setEncoding('utf-8');
 
     hideCursor();
-
-    // Enable SGR mouse tracking
-    process.stdout.write('\x1b[?1000h\x1b[?1002h\x1b[?1006h');
-
-    // Ensure sidebar has the exact desired width initially
-    const desiredWidth = Math.max(16, Math.min(60, this.config.sidebarWidth || 26));
-    setSidebarWidth(desiredWidth);
+    process.stdout.write(MOUSE_ON);
+    setSidebarWidth(this.config.sidebarWidth);
 
     process.stdin.on('data', chunk => this.handleInput(chunk));
-    process.stdout.on('resize', () => {
-      this.handleResize();
-    });
+    process.stdout.on('resize', () => this.handleResize());
 
     process.on('SIGINT', () => this.exit());
     process.on('SIGTERM', () => this.exit());
     process.on('exit', () => {
       showCursor();
-      process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1006l');
+      process.stdout.write(MOUSE_OFF);
       if (this.monitorTimer) clearInterval(this.monitorTimer);
       if (this.configWatcher) this.configWatcher.close();
     });
 
-    // Watch config file for external changes (e.g. from Ctrl+E popup switcher)
-    try {
-      const cfgFile = getConfigFile();
-      if (fs.existsSync(cfgFile)) {
-        this.configWatcher = fs.watch(cfgFile, () => {
-          this.runMonitorCheck(true);
-        });
-      }
-    } catch (err) {
-      // Ignore
-    }
+    this.watchConfigDir();
 
-    // Initialize first bookmark as active session
     const current = this.getCurrentBookmark();
-    if (current) {
+    if (current && !getActiveBookmarkId()) {
       setActiveBookmarkId(getBookmarkKey(current));
     }
 
-    // Start background monitor loop (every 1.5s)
-    this.monitorTimer = setInterval(() => this.runMonitorCheck(), 1500);
-
-    this.setStatus('CLI-Agent ready. Use ↑/↓ to navigate, Enter to open.');
+    this.monitorTimer = setInterval(() => this.runMonitorCheck(), MONITOR_INTERVAL_MS);
+    this.setStatus('Ready. ↑/↓ to navigate, Enter to open.');
     this.runMonitorCheck(true);
-    this.render();
+  }
+
+  /** Watch the config directory (robust to atomic renames). */
+  watchConfigDir() {
+    try {
+      const dir = getConfigDir();
+      fs.mkdirSync(dir, { recursive: true });
+      this.configWatcher = fs.watch(dir, (event, filename) => {
+        if (filename !== 'bookmarks.json' && filename !== 'statuses.json') return;
+        clearTimeout(this.watchDebounce);
+        this.watchDebounce = setTimeout(() => {
+          if (filename === 'bookmarks.json') this.reloadConfig();
+          this.runMonitorCheck(true);
+        }, 120);
+      });
+    } catch (err) {
+      // fs.watch unsupported: the periodic monitor still runs.
+    }
+  }
+
+  reloadConfig() {
+    this.config = loadConfig();
+    this.selectedIndex = this.clampIndex(this.selectedIndex);
+    this.reloadAgents();
+  }
+
+  reloadAgents() {
+    this.agents = getAgentsWithStatus(this.config);
+    this.agentNames = getAgentProcessNames(this.config);
+    this.agentByShortcut = {};
+    for (const agent of this.agents) {
+      if (agent.shortcut) this.agentByShortcut[agent.shortcut] = agent;
+    }
+  }
+
+  clampIndex(index) {
+    const max = Math.max(0, (this.config.bookmarks || []).length - 1);
+    return Math.min(Math.max(0, index || 0), max);
+  }
+
+  exit() {
+    if (this.monitorTimer) clearInterval(this.monitorTimer);
+    if (this.saveWidthTimer) clearTimeout(this.saveWidthTimer);
+
+    const realWidth = this.getRealSidebarWidth();
+    if (realWidth) {
+      try {
+        updateConfig(config => { config.sidebarWidth = realWidth; });
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    showCursor();
+    process.stdout.write(`${MOUSE_OFF}\x1b[2J\x1b[H`);
+    killSession();
+    process.exit(0);
+  }
+
+  // -------------------------------------------------------------------------
+  // Monitoring
+  // -------------------------------------------------------------------------
+
+  findBookmarkByKey(key) {
+    return this.config.bookmarks.find(b => getBookmarkKey(b) === key) || null;
   }
 
   runMonitorCheck(forceRender = false) {
     let changed = false;
 
-    // Detect if right terminal pane was closed by user (e.g. typed exit)
-    try {
-      const panesStr = execSync(
-        `tmux display-message -p -t ${SESSION_NAME}:0 '#{window_panes}' 2>/dev/null`,
-        { encoding: 'utf-8' }
-      ).trim();
-      if (parseInt(panesStr, 10) < 2) {
-        this.exit();
-        return;
-      }
-    } catch (err) {}
+    // The right terminal was closed (user typed `exit`): recreate it instead of
+    // killing every background session. Only after the initial split happened.
+    const paneCount = getMainWindowPaneCount();
+    if (paneCount >= 2) {
+      this.seenTerminalPane = true;
+    } else if (paneCount === 1 && this.seenTerminalPane) {
+      const activeBm = this.findBookmarkByKey(getActiveBookmarkId());
+      const dir = activeBm && fs.existsSync(activeBm.path) ? activeBm.path : process.cwd();
+      respawnTerminalPane(dir, this.getRealSidebarWidth() || this.config.sidebarWidth);
+      this.setStatus('Terminal restarted.');
+    }
 
-    const manualStatuses = loadManualStatuses();
     const activeId = getActiveBookmarkId() || (this.getCurrentBookmark() ? getBookmarkKey(this.getCurrentBookmark()) : null);
 
-    // Sync selectedIndex and reload config if active session changed externally (e.g. from Ctrl+E switcher)
+    // Active session changed elsewhere (e.g. Ctrl+E switcher): follow it.
     if (activeId && activeId !== this.lastActiveId) {
       this.lastActiveId = activeId;
-      this.config = loadConfig();
+      this.reloadConfig();
       const idx = this.config.bookmarks.findIndex(b => getBookmarkKey(b) === activeId);
-      if (idx !== -1) {
-        this.selectedIndex = idx;
-      }
+      if (idx !== -1) this.selectedIndex = idx;
       changed = true;
     }
 
-    // 1. Analyze terminal output for all open sessions (visible + background)
+    // 1. Statuses: one tmux call for all panes, one capture per open session
+    const manual = loadManualStatuses();
+    const { panes } = getSessionPanes(activeId);
     for (const bm of this.config.bookmarks) {
-      const bmId = getBookmarkKey(bm);
-      const isOpen = (bmId === activeId) || hasBookmarkWindow(bmId);
-
-      if (isOpen) {
-        const paneOutput = getPaneOutputForBookmark(bmId, activeId, 25);
-        const procInfo = getPaneProcessForBookmark(bmId, activeId);
-        const detected = detectTerminalStatus(paneOutput, procInfo);
-        const prev = this.bookmarkStatuses[bmId];
-
-        if (manualStatuses[bmId] || manualStatuses[bm.name]) {
-          const m = manualStatuses[bmId] || manualStatuses[bm.name];
-          const matchType = Object.values(STATUS_TYPES).find(t => t.id === m.status) || STATUS_TYPES.IDLE;
-          if (!prev || prev.id !== matchType.id) {
-            this.bookmarkStatuses[bmId] = matchType;
-            changed = true;
-          }
-        } else {
-          if (!prev || prev.id !== detected.id) {
-            this.bookmarkStatuses[bmId] = detected;
-            changed = true;
-          }
-        }
-      } else {
-        if (!this.bookmarkStatuses[bmId]) {
-          this.bookmarkStatuses[bmId] = STATUS_TYPES.IDLE;
-        }
+      const key = getBookmarkKey(bm);
+      const pane = panes.get(key);
+      let detected = STATUS_TYPES.IDLE;
+      let proc = null;
+      if (pane) {
+        proc = procInfoFromPane(pane, this.agentNames);
+        detected = detectTerminalStatus(capturePane(pane.paneId, 25), proc);
+      }
+      const manualEntry = getManualStatus(manual, key) || getManualStatus(manual, bm.name);
+      const status = resolveStatus(manualEntry, detected, proc);
+      const prev = this.bookmarkStatuses[key];
+      if (!prev || prev.id !== status.id) {
+        this.bookmarkStatuses[key] = status;
+        changed = true;
       }
     }
 
-    // 2. Check git info periodically (every 6 seconds)
+    // 2. Git info, asynchronously (never blocks key handling)
     const now = Date.now();
-    if (now - this.lastGitCheck > 6000) {
+    if (now - this.lastGitCheck > GIT_INTERVAL_MS && this.gitInFlight === 0) {
       this.lastGitCheck = now;
-      this.config.bookmarks.forEach(bm => {
-        const key = bm.id || bm.name;
-        const git = getGitInfo(bm.path);
-        if (git) {
-          this.gitInfoCache[key] = git;
-        }
-      });
-      changed = true;
+      this.refreshGitInfo();
     }
 
-    // 3. Update tmux status bar if any bookmark needs user action
-    const anyInputRequired = Object.values(this.bookmarkStatuses).some(
-      s => s && s.id === STATUS_TYPES.INPUT_REQUIRED.id
-    );
-
+    // 3. tmux status bar alert
+    const anyInputRequired = this.config.bookmarks.some(bm => {
+      const s = this.bookmarkStatuses[getBookmarkKey(bm)];
+      return s && s.id === STATUS_TYPES.INPUT_REQUIRED.id;
+    });
     if (anyInputRequired !== this.hasActiveAlert) {
       this.hasActiveAlert = anyInputRequired;
-      this.updateTmuxStatusBar(anyInputRequired);
+      setStatusRight(statusRight(this.config.switcherKey || 'C-e', anyInputRequired));
       changed = true;
     }
 
-    if (changed || forceRender) {
-      if (this.mode === 'normal') {
-        this.render();
-      }
+    if (changed || forceRender) this.render();
+  }
+
+  refreshGitInfo() {
+    for (const bm of this.config.bookmarks) {
+      const key = getBookmarkKey(bm);
+      this.gitInFlight++;
+      getGitInfoAsync(bm.path, git => {
+        this.gitInFlight--;
+        const prev = this.gitInfoCache[key];
+        const prevSummary = prev ? prev.summary : null;
+        const nextSummary = git ? git.summary : null;
+        if (git) this.gitInfoCache[key] = git;
+        else delete this.gitInfoCache[key];
+        if (prevSummary !== nextSummary && this.mode === 'normal') this.render();
+      });
     }
   }
 
-  updateTmuxStatusBar(hasAlert) {
-    try {
-      if (hasAlert) {
-        execSync(
-          `tmux set-option -t ${SESSION_NAME} status-right "#[bg=yellow,fg=black,bold] 🔔 ACTION REQUIRED #[default] │ #[fg=#a6adc8]Ctrl+E: Switcher │ Alt+←: Menu#[default]"`,
-          { stdio: 'ignore' }
-        );
-      } else {
-        execSync(
-          `tmux set-option -t ${SESSION_NAME} status-right "#[fg=#a6adc8]Ctrl+E: Switcher │ Alt+←/Alt+h: Menu │ F3: Mouse #[default]"`,
-          { stdio: 'ignore' }
-        );
-      }
-    } catch (err) {
-      // Ignore
-    }
-  }
+  // -------------------------------------------------------------------------
+  // Status line & sizing
+  // -------------------------------------------------------------------------
 
   setStatus(msg, timeoutMs = 3500) {
     this.statusMessage = msg;
@@ -243,81 +278,42 @@ class SidebarApp {
   }
 
   getRealSidebarWidth() {
-    try {
-      const panesStr = execSync(
-        `tmux display-message -p -t ${SESSION_NAME}:0 '#{window_panes}' 2>/dev/null`,
-        { encoding: 'utf-8' }
-      ).trim();
-      const panesCount = parseInt(panesStr, 10);
-      if (panesCount < 2) {
-        return null;
-      }
-
-      const pWidthStr = execSync(
-        `tmux display-message -p -t ${SESSION_NAME}:0.0 '#{pane_width}' 2>/dev/null`,
-        { encoding: 'utf-8' }
-      ).trim();
-      const paneWidth = parseInt(pWidthStr, 10);
-
-      const wWidthStr = execSync(
-        `tmux display-message -p -t ${SESSION_NAME}:0 '#{window_width}' 2>/dev/null`,
-        { encoding: 'utf-8' }
-      ).trim();
-      const winWidth = parseInt(wWidthStr, 10);
-
-      // Validate: must be a legitimate split sidebar (16-60 cols, at most 50% of window)
-      if (paneWidth >= 16 && paneWidth <= 60 && (!winWidth || paneWidth <= Math.floor(winWidth * 0.5))) {
-        return paneWidth;
-      }
-    } catch (err) {
-      // Ignore
+    const w = getPaneWidths();
+    if (!w || w.panes < 2) return null;
+    // Must be a legitimate split sidebar (16-60 cols, at most half the window)
+    if (w.paneWidth >= 16 && w.paneWidth <= 60 && (!w.windowWidth || w.paneWidth <= Math.floor(w.windowWidth * 0.5))) {
+      return w.paneWidth;
     }
     return null;
   }
 
   handleResize() {
     const realWidth = this.getRealSidebarWidth();
-    if (realWidth) {
-      this.persistSidebarWidth(realWidth);
-    }
+    if (realWidth) this.persistSidebarWidth(realWidth);
     this.render();
   }
 
   persistSidebarWidth(width) {
-    if (!width || width < 16 || width > 60) return;
+    if (clampWidth(width) !== width) return;
     if (this.saveWidthTimer) clearTimeout(this.saveWidthTimer);
     this.saveWidthTimer = setTimeout(() => {
       try {
-        const config = loadConfig();
-        if (config.sidebarWidth !== width) {
-          config.sidebarWidth = width;
-          saveConfig(config);
-        }
+        updateConfig(config => { config.sidebarWidth = width; });
       } catch (err) {
-        // Ignore
+        // ignore
       }
     }, 200);
   }
 
-  exit() {
-    if (this.monitorTimer) clearInterval(this.monitorTimer);
-    if (this.saveWidthTimer) clearTimeout(this.saveWidthTimer);
-
-    const realWidth = this.getRealSidebarWidth();
-    if (realWidth) {
+  scheduleSelectionSave() {
+    if (this.saveSelectionTimer) clearTimeout(this.saveSelectionTimer);
+    this.saveSelectionTimer = setTimeout(() => {
       try {
-        const config = loadConfig();
-        config.sidebarWidth = realWidth;
-        saveConfig(config);
+        updateConfig(config => { config.selectedIndex = this.selectedIndex; });
       } catch (err) {
-        // Ignore
+        // ignore
       }
-    }
-
-    showCursor();
-    process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[2J\x1b[H');
-    killSession(SESSION_NAME);
-    process.exit(0);
+    }, 300);
   }
 
   getCurrentBookmark() {
@@ -325,171 +321,161 @@ class SidebarApp {
     return this.config.bookmarks[this.selectedIndex] || null;
   }
 
+  // -------------------------------------------------------------------------
+  // Input
+  // -------------------------------------------------------------------------
+
   handleInput(chunk) {
-    // SGR Mouse handling: \x1b[<0;X;YM (click)
+    // SGR mouse: \x1b[<btn;col;row(M|m)
     if (chunk.startsWith('\x1b[<')) {
       const match = chunk.match(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/);
-      if (match) {
+      if (match && this.mode === 'normal') {
         const btn = parseInt(match[1], 10);
-        const col = parseInt(match[2], 10);
         const row = parseInt(match[3], 10);
-        const isRelease = match[4] === 'm';
-
-        if (btn === 0 && !isRelease && this.mode === 'normal') {
-          this.handleMouseClick(row, col);
-          return;
-        }
+        const isPress = match[4] === 'M';
+        if (btn === 0 && isPress) this.handleMouseClick(row);
+        else if (btn === 64) this.moveSelection(-1);
+        else if (btn === 65) this.moveSelection(1);
       }
       return;
     }
 
-    if (this.mode === 'normal') {
-      this.handleNormalKey(chunk);
-    } else if (this.mode === 'add' || this.mode === 'edit') {
-      this.handleInputMode(chunk);
-    } else if (this.mode === 'delete_confirm') {
-      this.handleDeleteConfirm(chunk);
-    } else if (this.mode === 'quit_confirm') {
-      this.handleQuitConfirm(chunk);
-    } else if (this.mode === 'select_agent') {
-      this.handleAgentSelectorKey(chunk);
+    switch (this.mode) {
+      case 'normal': return this.handleNormalKey(chunk);
+      case 'add':
+      case 'edit': return this.handleInputMode(chunk);
+      case 'delete_confirm': return this.handleDeleteConfirm(chunk);
+      case 'quit_confirm': return this.handleQuitConfirm(chunk);
+      case 'select_agent': return this.handleAgentSelectorKey(chunk);
+      default: return undefined;
     }
   }
 
-  handleMouseClick(row, col) {
-    // Bookmarks start around row 5 in compact layout, 2 lines per bookmark
-    const bookmarkStartRow = 5;
-    const clickedIndex = Math.floor((row - bookmarkStartRow) / 2);
+  handleMouseClick(row) {
+    const index = this.rowMap[row];
+    if (index === undefined) return;
+    this.selectedIndex = index;
+    this.scheduleSelectionSave();
+    this.activateSelectedBookmark('');
+  }
 
-    if (clickedIndex >= 0 && clickedIndex < this.config.bookmarks.length) {
-      this.selectedIndex = clickedIndex;
-      this.config.selectedIndex = clickedIndex;
-      saveConfig(this.config);
+  moveSelection(delta) {
+    const next = this.clampIndex(this.selectedIndex + delta);
+    if (next !== this.selectedIndex) {
+      this.selectedIndex = next;
+      this.scheduleSelectionSave();
       this.render();
-      this.activateSelectedBookmark('');
     }
   }
 
   handleNormalKey(key) {
-    // Arrows & navigation
-    if (key === '\u001b[A' || key === 'k') {
-      // Up
-      if (this.selectedIndex > 0) {
-        this.selectedIndex--;
-        this.config.selectedIndex = this.selectedIndex;
-        saveConfig(this.config);
+    if (key === '\x1b[A' || key === 'k') return this.moveSelection(-1);
+    if (key === '\x1b[B' || key === 'j') return this.moveSelection(1);
+    if (key === '\r' || key === '\n') return this.activateSelectedBookmark('');
+    if (key === '\t' || key === '\x1b[C') return focusPane(1);
+
+    if (key.length !== 1) return undefined;
+    const k = key.toLowerCase();
+
+    // Agent shortcuts (configurable)
+    if (this.agentByShortcut[k]) return this.activateSelectedBookmark(this.agentByShortcut[k].id);
+
+    switch (k) {
+      case 's':
+        return this.activateSelectedBookmark('');
+      case ' ':
+      case 'o':
+        if (this.config.bookmarks.length > 0) {
+          this.mode = 'select_agent';
+          this.agentMenuIndex = 0;
+          this.render();
+        }
+        return undefined;
+      case 'a':
+        return this.startAddBookmark();
+      case 'd':
+        if (this.config.bookmarks.length > 0) {
+          this.mode = 'delete_confirm';
+          this.render();
+        }
+        return undefined;
+      case 'e':
+        if (this.config.bookmarks.length > 0) this.startEditBookmark();
+        return undefined;
+      case 'r': {
+        const cur = this.getCurrentBookmark();
+        if (cur) {
+          const bmKey = getBookmarkKey(cur);
+          delete this.bookmarkStatuses[bmKey];
+          clearManualStatus(bmKey);
+          clearManualStatus(cur.name);
+          this.setStatus('Status reset.');
+          this.runMonitorCheck(true);
+        }
+        return undefined;
+      }
+      case '<':
+      case '[':
+      case '-':
+        resizeSidebar(-2);
+        setTimeout(() => this.handleResize(), 60);
+        return undefined;
+      case '>':
+      case ']':
+      case '+':
+        resizeSidebar(2);
+        setTimeout(() => this.handleResize(), 60);
+        return undefined;
+      case 'w': {
+        this.widthPresetIndex = (this.widthPresetIndex + 1) % this.widthPresets.length;
+        const targetWidth = this.widthPresets[this.widthPresetIndex];
+        setSidebarWidth(targetWidth);
+        this.persistSidebarWidth(targetWidth);
+        this.setStatus(`Sidebar: ${targetWidth} cols`);
+        return undefined;
+      }
+      case 'q':
+        this.mode = 'quit_confirm';
         this.render();
-      }
-    } else if (key === '\u001b[B' || key === 'j') {
-      // Down
-      if (this.selectedIndex < this.config.bookmarks.length - 1) {
-        this.selectedIndex++;
-        this.config.selectedIndex = this.selectedIndex;
-        saveConfig(this.config);
-        this.render();
-      }
-    } else if (key === '\r' || key === '\n') {
-      // Enter: switch right terminal to this independent bookmark session
-      this.activateSelectedBookmark('');
-    } else if (key === 'c' || key === 'C') {
-      // Launch Claude Code in this bookmark session
-      this.activateSelectedBookmark('claude');
-    } else if (key === 'p' || key === 'P') {
-      // Launch Copilot in this bookmark session
-      this.activateSelectedBookmark('copilot');
-    } else if (key === 's' || key === 'S') {
-      // Switch to standard Shell
-      this.activateSelectedBookmark('');
-    } else if (key === ' ' || key === 'o' || key === 'O') {
-      // Open Agent selector modal
-      if (this.config.bookmarks.length > 0) {
-        this.mode = 'select_agent';
-        this.agentMenuIndex = 0;
-        this.render();
-      }
-    } else if (key === 'a' || key === 'A') {
-      // Add bookmark
-      this.startAddBookmark();
-    } else if (key === 'd' || key === 'D') {
-      // Delete bookmark
-      if (this.config.bookmarks.length > 0) {
-        this.mode = 'delete_confirm';
-        this.render();
-      }
-    } else if (key === 'e' || key === 'E') {
-      // Edit bookmark
-      if (this.config.bookmarks.length > 0) {
-        this.startEditBookmark();
-      }
-    } else if (key === 'r' || key === 'R') {
-      // Reset live status
-      const cur = this.getCurrentBookmark();
-      if (cur) {
-        const key = getBookmarkKey(cur);
-        delete this.bookmarkStatuses[key];
-        saveManualStatus(key, 'idle', '');
-        this.setStatus('Status reset.');
-        this.runMonitorCheck(true);
-      }
-    } else if (key === '<' || key === '[' || key === '-') {
-      // Shrink sidebar width
-      resizeSidebar(-2);
-      setTimeout(() => this.handleResize(), 60);
-    } else if (key === '>' || key === ']' || key === '+') {
-      // Expand sidebar width
-      resizeSidebar(2);
-      setTimeout(() => this.handleResize(), 60);
-    } else if (key === 'w' || key === 'W') {
-      // Cycle width presets
-      this.widthPresetIndex = (this.widthPresetIndex + 1) % this.widthPresets.length;
-      const targetWidth = this.widthPresets[this.widthPresetIndex];
-      setSidebarWidth(targetWidth);
-      this.persistSidebarWidth(targetWidth);
-      this.setStatus(`Sidebar: ${targetWidth} cols`);
-    } else if (key === '\t' || key === '\u001b[C') {
-      // Tab or Right Arrow: focus right terminal pane
-      focusPane(1);
-    } else if (key === 'q' || key === 'Q') {
-      this.mode = 'quit_confirm';
-      this.render();
+        return undefined;
+      default:
+        return undefined;
     }
   }
 
-  activateSelectedBookmark(agentCommand = '') {
+  activateSelectedBookmark(agentId = '') {
     const current = this.getCurrentBookmark();
     if (!current) {
       this.setStatus('⚠️ No bookmark selected.');
       return;
     }
 
-    // Verify directory exists
     if (!fs.existsSync(current.path)) {
       this.setStatus(`⚠️ Directory not found: ${shrinkPath(current.path)}`);
       return;
     }
 
-    let cmd = agentCommand;
-    if (cmd) {
-      const agent = resolveAgent(cmd);
-      cmd = agent.cmd;
+    let cmd = '';
+    if (agentId) {
+      const agent = this.agents.find(a => a.id === agentId);
+      if (agent && agent.cmd) {
+        if (!agent.installed) {
+          this.setStatus(`⚠️ ${agent.name}: "${agent.cmd.split(' ')[0]}" not found in PATH`);
+          return;
+        }
+        cmd = agent.cmd;
+      }
     }
 
-    // Switch right terminal to target bookmark (swaps background windows seamlessly!)
     switchToBookmark(current, cmd, true);
-
-    const title = current.name;
-    this.setStatus(`Switched to "${title}"`);
-    this.render();
+    this.lastActiveId = getBookmarkKey(current);
+    this.setStatus(`Switched to "${current.name}"`);
   }
 
   startAddBookmark() {
     this.mode = 'add';
     this.inputStep = 1;
-    this.inputTemp = {
-      name: '',
-      path: '',
-      agent: 'claude'
-    };
+    this.inputTemp = { name: '', path: '', agent: 'claude' };
     this.inputPrompt = 'Bookmark name:';
     this.inputValue = '';
     this.render();
@@ -500,120 +486,154 @@ class SidebarApp {
     if (!current) return;
     this.mode = 'edit';
     this.inputStep = 1;
-    this.inputTemp = {
-      name: current.name,
-      path: current.path,
-      agent: current.agent || 'claude'
-    };
+    this.inputTemp = { name: current.name, path: current.path, agent: current.agent || 'claude' };
     this.inputPrompt = `New name [${current.name}]:`;
     this.inputValue = current.name;
     this.render();
   }
 
+  finishAdd() {
+    addBookmark(this.inputTemp.name, this.inputTemp.path, this.inputTemp.agent);
+    this.reloadConfig();
+    this.selectedIndex = this.config.bookmarks.length - 1;
+    this.mode = 'normal';
+    this.setStatus(`✅ Bookmark "${this.inputTemp.name}" created!`);
+  }
+
   handleInputMode(key) {
-    if (key === '\u001b') {
-      // Escape: cancel
-      this.mode = 'normal';
-      this.setStatus('Action cancelled.');
-      this.render();
-      return;
-    }
-
-    if (key === '\r' || key === '\n') {
-      // Submit step
-      if (this.mode === 'add') {
-        if (this.inputStep === 1) {
-          this.inputTemp.name = this.inputValue.trim() || 'Project';
-          this.inputStep = 2;
-          this.inputPrompt = 'Path (~/..., . for current):';
-          this.inputValue = process.cwd();
-          this.render();
-          return;
-        } else if (this.inputStep === 2) {
-          const enteredPath = this.inputValue.trim() || '.';
-          const resolved = resolvePath(enteredPath);
-          this.inputTemp.path = resolved;
-
-          if (!fs.existsSync(resolved)) {
-            try {
-              fs.mkdirSync(resolved, { recursive: true });
-            } catch (err) {
-              // Ignore
-            }
-          }
-
-          addBookmark(this.inputTemp.name, this.inputTemp.path, this.inputTemp.agent);
-          this.config = loadConfig();
-          this.selectedIndex = this.config.bookmarks.length - 1;
+    // Step 3 of "add": confirm creation of a missing directory
+    if (this.mode === 'add' && this.inputStep === 3) {
+      if (key === 'y' || key === 'Y') {
+        try {
+          fs.mkdirSync(this.inputTemp.path, { recursive: true });
+        } catch (err) {
           this.mode = 'normal';
-          this.setStatus(`✅ Bookmark "${this.inputTemp.name}" created!`);
-          this.render();
+          this.setStatus(`⚠️ Cannot create directory: ${err.message}`);
           return;
         }
-      } else if (this.mode === 'edit') {
-        if (this.inputStep === 1) {
-          if (this.inputValue.trim()) {
-            this.inputTemp.name = this.inputValue.trim();
-          }
-          this.inputStep = 2;
-          this.inputPrompt = `Path [${shrinkPath(this.inputTemp.path)}]:`;
-          this.inputValue = this.inputTemp.path;
-          this.render();
-          return;
-        } else if (this.inputStep === 2) {
-          if (this.inputValue.trim()) {
-            this.inputTemp.path = resolvePath(this.inputValue.trim());
-          }
-          updateBookmark(this.selectedIndex, {
-            name: this.inputTemp.name,
-            path: this.inputTemp.path
-          });
-          this.config = loadConfig();
-          this.mode = 'normal';
-          this.setStatus(`✅ Bookmark updated!`);
-          this.render();
-          return;
-        }
-      }
-      return;
-    }
-
-    // Backspace
-    if (key === '\u0008' || key === '\u007f') {
-      if (this.inputValue.length > 0) {
-        this.inputValue = this.inputValue.slice(0, -1);
+        this.finishAdd();
+      } else {
+        // Back to the path step
+        this.inputStep = 2;
+        this.inputPrompt = 'Path (~/..., . for current):';
+        this.inputValue = this.inputTemp.path;
         this.render();
       }
       return;
     }
 
-    // Regular typing
-    if (key.length === 1 && key >= ' ') {
-      this.inputValue += key;
+    if (key === '\x1b') {
+      this.mode = 'normal';
+      this.setStatus('Action cancelled.');
+      return;
+    }
+
+    if (key === '\r' || key === '\n') {
+      this.submitInputStep();
+      return;
+    }
+
+    // Backspace
+    if (key === '\x08' || key === '\x7f') {
+      if (this.inputValue.length > 0) {
+        this.inputValue = Array.from(this.inputValue).slice(0, -1).join('');
+        this.render();
+      }
+      return;
+    }
+
+    // Ctrl+U: clear the field
+    if (key === '\x15') {
+      this.inputValue = '';
       this.render();
+      return;
+    }
+
+    // Typing or pasting (bracketed paste markers removed, control chars dropped)
+    const text = key.replace(/\x1b\[20[01]~/g, '');
+    if (text.startsWith('\x1b')) return; // arrows / other escape sequences
+    const printable = Array.from(text).filter(ch => ch >= ' ' && ch !== '\x7f').join('');
+    if (printable) {
+      this.inputValue += printable;
+      this.render();
+    }
+  }
+
+  submitInputStep() {
+    if (this.mode === 'add') {
+      if (this.inputStep === 1) {
+        this.inputTemp.name = this.inputValue.trim() || 'Project';
+        this.inputStep = 2;
+        this.inputPrompt = 'Path (~/..., . for current):';
+        this.inputValue = process.cwd();
+        this.render();
+        return;
+      }
+      if (this.inputStep === 2) {
+        this.inputTemp.path = resolvePath(this.inputValue.trim() || '.');
+        if (!fs.existsSync(this.inputTemp.path)) {
+          this.inputStep = 3;
+          this.inputPrompt = `Create ${shrinkPath(this.inputTemp.path)}? (y/N)`;
+          this.render();
+          return;
+        }
+        this.finishAdd();
+      }
+      return;
+    }
+
+    if (this.mode === 'edit') {
+      if (this.inputStep === 1) {
+        if (this.inputValue.trim()) this.inputTemp.name = this.inputValue.trim();
+        this.inputStep = 2;
+        this.inputPrompt = `Path [${shrinkPath(this.inputTemp.path)}]:`;
+        this.inputValue = this.inputTemp.path;
+        this.render();
+        return;
+      }
+      if (this.inputStep === 2) {
+        if (this.inputValue.trim()) this.inputTemp.path = resolvePath(this.inputValue.trim());
+        updateBookmark(this.selectedIndex, { name: this.inputTemp.name, path: this.inputTemp.path });
+        this.reloadConfig();
+        this.mode = 'normal';
+        const warn = fs.existsSync(this.inputTemp.path) ? '' : ' (⚠️ directory does not exist)';
+        this.setStatus(`✅ Bookmark updated!${warn}`);
+      }
     }
   }
 
   handleDeleteConfirm(key) {
-    if (key === 'o' || key === 'O' || key === 'y' || key === 'Y') {
-      const removed = removeBookmark(this.selectedIndex);
-      if (removed) {
-        closeBookmarkSession(removed.id || removed.name);
-      }
-      this.config = loadConfig();
-      this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.config.bookmarks.length - 1));
-      this.mode = 'normal';
-      this.setStatus(`🗑️ Deleted "${removed ? removed.name : ''}".`);
-      this.render();
-    } else {
+    if (key !== 'y' && key !== 'Y') {
       this.mode = 'normal';
       this.setStatus('Cancelled.');
-      this.render();
+      return;
     }
+
+    const target = this.getCurrentBookmark();
+    const removedKey = target ? getBookmarkKey(target) : null;
+    const wasActive = removedKey && removedKey === getActiveBookmarkId();
+    const removed = removeBookmark(this.selectedIndex);
+    this.reloadConfig();
+    this.selectedIndex = this.clampIndex(this.selectedIndex);
+
+    if (removed) {
+      if (wasActive && this.config.bookmarks.length > 0) {
+        // Show another bookmark first: the deleted session then lives in a
+        // background window that can be closed.
+        const next = this.getCurrentBookmark();
+        switchToBookmark(next, '', false);
+        this.lastActiveId = getBookmarkKey(next);
+      }
+      closeBookmarkSession(removedKey);
+      clearManualStatus(removedKey);
+    }
+
+    this.mode = 'normal';
+    this.setStatus(`🗑️ Deleted "${removed ? removed.name : ''}".`);
   }
 
   handleQuitConfirm(key) {
-    if (key === 'o' || key === 'O' || key === 'y' || key === 'Y' || key === '\r' || key === '\n') {
+    if (key === 'y' || key === 'Y' || key === '\r' || key === '\n') {
       this.exit();
     } else {
       this.mode = 'normal';
@@ -623,144 +643,153 @@ class SidebarApp {
 
   handleAgentSelectorKey(key) {
     const options = this.agents;
-    if (key === '\u001b[A' || key === 'k') {
+    if (key === '\x1b[A' || key === 'k') {
       this.agentMenuIndex = (this.agentMenuIndex - 1 + options.length) % options.length;
       this.render();
-    } else if (key === '\u001b[B' || key === 'j') {
+    } else if (key === '\x1b[B' || key === 'j') {
       this.agentMenuIndex = (this.agentMenuIndex + 1) % options.length;
       this.render();
     } else if (key === '\r' || key === '\n') {
       const selectedAgent = options[this.agentMenuIndex];
       this.mode = 'normal';
       this.activateSelectedBookmark(selectedAgent.id);
-    } else if (key === '\u001b' || key === 'q') {
+    } else if (key === '\x1b' || key === 'q') {
       this.mode = 'normal';
       this.render();
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Rendering
+  // -------------------------------------------------------------------------
+
+  /** Lay out "[key] Label" hints over as many lines as needed. */
+  legendLines(width) {
+    const items = [['Enter', 'Open']];
+    for (const agent of this.agents) {
+      if (agent.shortcut) items.push([agent.shortcut, agent.name.split(' ')[0]]);
+    }
+    items.push(['a', 'Add'], ['e', 'Edit'], ['d', 'Delete'], ['o', 'Agents'], ['< >', 'Size'], ['Tab', 'Term'], ['q', 'Quit']);
+
+    const lines = [];
+    let current = '';
+    for (const [key, label] of items) {
+      const token = `${colors.brightGreen}[${key}]${colors.reset} ${label}`;
+      const candidate = current ? `${current}  ${token}` : token;
+      if (current && visibleLength(candidate) > width) {
+        lines.push(current);
+        current = token;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current) lines.push(current);
+    return lines;
+  }
+
+  bottomSection(width) {
+    const lines = [];
+    if (this.mode === 'add' || this.mode === 'edit') {
+      lines.push(`${colors.bold}${colors.brightMagenta}${this.mode === 'add' ? 'ADD BOOKMARK' : 'EDIT'}${colors.reset}`);
+      lines.push(`${colors.yellow}${truncate(this.inputPrompt, width - 2)}${colors.reset}`);
+      if (!(this.mode === 'add' && this.inputStep === 3)) {
+        // Show the end of long values (paths)
+        const max = Math.max(1, width - 3);
+        const chars = Array.from(this.inputValue);
+        const shown = chars.length > max ? '…' + chars.slice(-(max - 1)).join('') : this.inputValue;
+        lines.push(`${colors.brightGreen}❯ ${shown}█${colors.reset}`);
+        lines.push(`${colors.dim}[Enter] Next │ [Esc] Cancel${colors.reset}`);
+      }
+    } else if (this.mode === 'delete_confirm') {
+      const current = this.getCurrentBookmark();
+      lines.push(`${colors.bold}${colors.brightRed}DELETE BOOKMARK?${colors.reset}`);
+      lines.push(`"${truncate(current ? current.name : '', width - 4)}"`);
+      lines.push(`${colors.yellow}Its terminal will be closed. (y/N)${colors.reset}`);
+    } else if (this.mode === 'quit_confirm') {
+      lines.push(`${colors.bold}${colors.brightYellow}QUIT CLI-AGENT?${colors.reset}`);
+      lines.push(`${colors.gray}All sessions will close. (y/N)${colors.reset}`);
+    } else if (this.mode === 'select_agent') {
+      lines.push(`${colors.bold}${colors.brightCyan}CHOOSE AGENT${colors.reset}`);
+      this.agents.forEach((agent, idx) => {
+        const isSel = idx === this.agentMenuIndex;
+        const label = truncate(`${agent.name}${agent.installed ? '' : ' (missing)'}`, width - 4);
+        lines.push(isSel ? `${colors.brightGreen}▶ ${label}${colors.reset}` : `  ${colors.white}${label}${colors.reset}`);
+      });
+      lines.push(`${colors.dim}[Enter] Launch │ [Esc] Back${colors.reset}`);
+    } else {
+      lines.push(...this.legendLines(width));
+    }
+    return lines;
+  }
+
   render() {
-    const width = Math.max(20, process.stdout.columns || 26);
-    const height = Math.max(12, process.stdout.rows || 24);
+    const width = Math.max(16, process.stdout.columns || 26);
+    const height = Math.max(10, process.stdout.rows || 24);
+    const lines = [];
+    this.rowMap = {};
 
-    let lines = [];
-
-    // Clean, compact Header
-    lines.push(`${colors.bold}${colors.brightCyan}🤖 CLI-AGENT${colors.reset} ${colors.gray}v1.0${colors.reset}`);
+    lines.push(`${colors.bold}${colors.brightCyan}🤖 CLI-AGENT${colors.reset} ${colors.gray}v${VERSION}${colors.reset}`);
     if (this.hasActiveAlert) {
       lines.push(`${colors.bold}${colors.brightYellow}🔔 ACTION REQUIRED!${colors.reset}`);
     }
-    lines.push(`${colors.dim}${colors.gray}${drawLine(width, '─')}${colors.reset}`);
+    lines.push(`${colors.dim}${colors.gray}${drawLine(width)}${colors.reset}`);
 
-    // Section Bookmarks
     const count = this.config.bookmarks.length;
     lines.push(`${colors.bold}${colors.brightYellow}PROJECTS (${count})${colors.reset}`);
+
+    const bottom = [`${colors.dim}${colors.gray}${drawLine(width)}${colors.reset}`, ...this.bottomSection(width)];
+    const statusLines = this.statusMessage
+      ? ['', `${colors.brightYellow}ℹ️ ${truncate(this.statusMessage, width - 4)}${colors.reset}`]
+      : [];
 
     if (count === 0) {
       lines.push(`${colors.gray}No bookmarks yet.${colors.reset}`);
       lines.push(`${colors.cyan}[a] to add one.${colors.reset}`);
     } else {
-      // Calculate max items to display: 2 lines per bookmark
       const activeId = getActiveBookmarkId();
-      const maxDisplay = Math.max(2, Math.floor((height - 14) / 2));
+      const available = height - lines.length - bottom.length - statusLines.length;
+      const maxDisplay = Math.max(1, Math.floor(available / 2));
       let startIdx = 0;
-      if (this.selectedIndex >= maxDisplay) {
-        startIdx = this.selectedIndex - maxDisplay + 1;
-      }
+      if (this.selectedIndex >= maxDisplay) startIdx = this.selectedIndex - maxDisplay + 1;
       const endIdx = Math.min(count, startIdx + maxDisplay);
 
       for (let i = startIdx; i < endIdx; i++) {
         const bm = this.config.bookmarks[i];
         const isSelected = i === this.selectedIndex;
-        const bmId = getBookmarkKey(bm);
-        const isActiveView = bmId === activeId;
-        const status = this.bookmarkStatuses[bmId] || STATUS_TYPES.IDLE;
-        const git = this.gitInfoCache[bmId];
+        const key = getBookmarkKey(bm);
+        const isActiveView = key === activeId;
+        const status = this.bookmarkStatuses[key] || STATUS_TYPES.IDLE;
+        const git = this.gitInfoCache[key];
 
-        const prefix = isSelected ? `${colors.brightGreen}▶ ${colors.reset}` : '  ';
-        const num = `${i + 1}.`;
-        const nameText = truncate(`${num} ${bm.name}`, width - 4);
+        const prefix = isSelected ? `${colors.brightGreen}▶ ${colors.reset}` : (isActiveView ? `${colors.brightCyan}• ${colors.reset}` : '  ');
+        const nameText = truncate(`${i + 1}. ${bm.name}`, width - 3);
+        const style = isSelected ? `${colors.bold}${colors.brightGreen}` : (isActiveView ? `${colors.bold}${colors.white}` : `${colors.dim}${colors.white}`);
 
-        // Line 1: Title
-        if (isSelected) {
-          lines.push(`${prefix}${colors.bold}${colors.brightGreen}${nameText}${colors.reset}`);
-        } else if (isActiveView) {
-          lines.push(`${prefix}${colors.bold}${colors.white}${nameText}${colors.reset}`);
-        } else {
-          lines.push(`${prefix}${colors.dim}${colors.white}${nameText}${colors.reset}`);
-        }
+        // Rows are 1-based in terminal mouse coordinates
+        this.rowMap[lines.length + 1] = i;
+        lines.push(`${prefix}${style}${nameText}${colors.reset}`);
 
-        // Line 2: Status Badge + Agent tag
-        let statusBadge = '';
-        if (status.id === STATUS_TYPES.INPUT_REQUIRED.id) {
-          statusBadge = `\x1b[43;30m${colors.bold} 🔔 ACTION \x1b[0m`;
-        } else if (status.id === STATUS_TYPES.RUNNING.id) {
-          statusBadge = `\x1b[46;30m${colors.bold} ⚡ RUN \x1b[0m`;
-        } else if (status.id === STATUS_TYPES.DONE.id) {
-          statusBadge = `${colors.brightGreen}✓ Done${colors.reset}`;
-        } else if (status.id === STATUS_TYPES.ERROR.id) {
-          statusBadge = `\x1b[41;37m${colors.bold} ✗ ERR \x1b[0m`;
-        } else if (status.id === STATUS_TYPES.RATE_LIMIT.id) {
-          statusBadge = `\x1b[45;37m${colors.bold} ⏳ LIMIT \x1b[0m`;
-        } else {
-          statusBadge = `${colors.gray}● Idle${colors.reset}`;
-        }
-
-        const agentTag = `${colors.gray}[${bm.agent || 'claude'}]${colors.reset}`;
         let gitTag = '';
-        if (git && width > 28) {
-          gitTag = git.isDirty ? ` ${colors.brightYellow}*${colors.reset}` : '';
+        if (git) {
+          const room = width - 3 - visibleLength(statusBadge(status)) - 1;
+          const branch = git.branch ? truncate(git.branch, Math.max(0, room - 2)) : '';
+          gitTag = room > 4 && branch
+            ? ` ${colors.gray}${branch}${colors.reset}${git.isDirty ? `${colors.brightYellow}*${colors.reset}` : ''}`
+            : (git.isDirty ? ` ${colors.brightYellow}*${colors.reset}` : '');
         }
+        this.rowMap[lines.length + 1] = i;
+        lines.push(`   ${statusBadge(status)}${gitTag}`);
+      }
 
-        lines.push(`   ${statusBadge} ${agentTag}${gitTag}`);
+      if (endIdx < count || startIdx > 0) {
+        // Replace nothing: scroll hint folded into the title line
+        lines[lines.findIndex(l => l.includes('PROJECTS ('))] =
+          `${colors.bold}${colors.brightYellow}PROJECTS (${count})${colors.reset} ${colors.gray}${startIdx + 1}-${endIdx}${colors.reset}`;
       }
     }
 
-    // Modal / Input Overlay or Shortcuts
-    lines.push(`${colors.dim}${colors.gray}${drawLine(width, '─')}${colors.reset}`);
-
-    if (this.mode === 'add' || this.mode === 'edit') {
-      lines.push(`${colors.bold}${colors.brightMagenta}${this.mode === 'add' ? 'ADD BOOKMARK' : 'EDIT'}${colors.reset}`);
-      lines.push(`${colors.yellow}${truncate(this.inputPrompt, width - 2)}${colors.reset}`);
-      lines.push(`${colors.brightGreen}❯ ${truncate(this.inputValue, width - 5)}█${colors.reset}`);
-      lines.push(`${colors.dim}[Enter] Save │ [Esc] Back${colors.reset}`);
-    } else if (this.mode === 'delete_confirm') {
-      const current = this.getCurrentBookmark();
-      lines.push(`${colors.bold}${colors.brightRed}DELETE BOOKMARK?${colors.reset}`);
-      lines.push(`"${truncate(current ? current.name : '', width - 4)}"`);
-      lines.push(`${colors.yellow}Confirm? (y/N)${colors.reset}`);
-    } else if (this.mode === 'quit_confirm') {
-      lines.push(`${colors.bold}${colors.brightYellow}QUIT CLI-AGENT?${colors.reset}`);
-      lines.push(`${colors.gray}Close session? (y/N)${colors.reset}`);
-    } else if (this.mode === 'select_agent') {
-      lines.push(`${colors.bold}${colors.brightCyan}CHOOSE AGENT${colors.reset}`);
-      this.agents.forEach((agent, idx) => {
-        const isSel = idx === this.agentMenuIndex;
-        const icon = isSel ? '▶ ' : '  ';
-        if (isSel) {
-          lines.push(`${colors.brightGreen}${icon}${truncate(agent.name, width - 4)}${colors.reset}`);
-        } else {
-          lines.push(`${icon}${colors.white}${truncate(agent.name, width - 4)}${colors.reset}`);
-        }
-      });
-      lines.push(`${colors.dim}[Enter] Launch │ [Esc] Back${colors.reset}`);
-    } else {
-      // Compact Keyboard Legend
-      lines.push(`${colors.brightGreen}[Enter]${colors.reset} Switch  ${colors.brightGreen}[c]${colors.reset} Claude`);
-      lines.push(`${colors.brightGreen}[p]${colors.reset} Copilot  ${colors.brightGreen}[a]${colors.reset} Add`);
-      lines.push(`${colors.brightGreen}[d]${colors.reset} Delete   ${colors.brightGreen}[< >]${colors.reset} Size`);
-      lines.push(`${colors.brightGreen}[Tab]${colors.reset} Term    ${colors.brightGreen}[q]${colors.reset} Quit`);
-    }
-
-    // Status Notification Message at the bottom
-    if (this.statusMessage) {
-      lines.push('');
-      lines.push(`${colors.brightYellow}ℹ️ ${truncate(this.statusMessage, width - 4)}${colors.reset}`);
-    }
-
-    // Clear and output to terminal
-    clearScreen();
-    process.stdout.write(lines.join('\n'));
+    const output = [...lines, ...bottom, ...statusLines].slice(0, height);
+    paint(output);
   }
 }
 

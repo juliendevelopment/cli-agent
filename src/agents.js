@@ -1,77 +1,102 @@
-const { execSync } = require('child_process');
-
-function isCommandAvailable(cmd) {
-  try {
-    execSync(`which ${cmd} 2>/dev/null`, { stdio: 'ignore' });
-    return true;
-  } catch (err) {
-    return false;
-  }
-}
+const { commandExists } = require('./exec');
 
 const DEFAULT_AGENTS = [
   {
     id: 'claude',
     name: 'Claude Code',
-    cmd: 'claude',
-    testCmd: 'claude',
+    command: 'claude',
     shortcut: 'c',
     description: 'Anthropic Claude Code CLI'
   },
   {
     id: 'copilot',
-    name: 'GitHub Copilot',
-    cmd: 'copilot',
-    testCmd: 'copilot',
+    name: 'Copilot CLI',
+    command: 'copilot',
     shortcut: 'p',
     description: 'GitHub Copilot CLI'
   },
   {
     id: 'shell',
     name: 'Terminal Shell',
-    cmd: '',
-    testCmd: null,
-    shortcut: 's',
+    command: '',
+    shortcut: '',
     description: 'Standard interactive shell'
   }
 ];
 
-function getAgentsWithStatus() {
-  return DEFAULT_AGENTS.map(agent => {
-    let installed = true;
-    let effectiveCmd = agent.cmd;
+// Keys used by the sidebar itself; agents cannot steal them.
+const RESERVED_KEYS = new Set([
+  'a', 'd', 'e', 'j', 'k', 'o', 'q', 'r', 's', 'w',
+  ' ', '<', '>', '[', ']', '-', '+', '\t', '\r', '\n'
+]);
 
-    if (agent.id === 'copilot') {
-      if (isCommandAvailable('copilot')) {
-        installed = true;
-        effectiveCmd = 'copilot';
-      } else if (isCommandAvailable('gh')) {
-        // gh extension copilot
-        installed = true;
-        effectiveCmd = 'gh copilot';
-      } else {
-        installed = false;
-      }
-    } else if (agent.testCmd) {
-      installed = isCommandAvailable(agent.testCmd);
+/** First word of a command line (the executable to probe). */
+function executableOf(command) {
+  return String(command || '').trim().split(/\s+/)[0] || '';
+}
+
+/**
+ * Merge default agents with user-defined ones from config.agents. User entries
+ * override defaults with the same id. Invalid/reserved shortcuts are dropped.
+ */
+function getAgents(config = {}) {
+  const byId = new Map(DEFAULT_AGENTS.map(a => [a.id, { ...a }]));
+  const userAgents = Array.isArray(config.agents) ? config.agents : [];
+
+  for (const ua of userAgents) {
+    if (!ua || !ua.id) continue;
+    const base = byId.get(ua.id) || { id: ua.id, name: ua.id, command: '', shortcut: '' };
+    byId.set(ua.id, {
+      ...base,
+      ...ua,
+      command: ua.command !== undefined ? String(ua.command) : (ua.cmd !== undefined ? String(ua.cmd) : base.command)
+    });
+  }
+
+  const usedShortcuts = new Set();
+  return [...byId.values()].map(agent => {
+    let shortcut = String(agent.shortcut || '').toLowerCase();
+    if (shortcut.length !== 1 || RESERVED_KEYS.has(shortcut) || usedShortcuts.has(shortcut)) {
+      shortcut = '';
     }
+    if (shortcut) usedShortcuts.add(shortcut);
+    return { ...agent, shortcut };
+  });
+}
 
+function getAgentsWithStatus(config = {}) {
+  return getAgents(config).map(agent => {
+    const exe = executableOf(agent.command);
     return {
       ...agent,
-      cmd: effectiveCmd,
-      installed
+      cmd: agent.command,
+      installed: exe ? commandExists(exe) : true
     };
   });
 }
 
-function resolveAgent(agentId) {
-  const agents = getAgentsWithStatus();
-  return agents.find(a => a.id === agentId) || agents[0];
+function resolveAgent(agentId, config = {}) {
+  const agents = getAgentsWithStatus(config);
+  return agents.find(a => a.id === agentId) || null;
+}
+
+/** Process names that identify an agent running in the foreground. */
+function getAgentProcessNames(config = {}) {
+  const names = new Set(['claude', 'copilot', 'gemini', 'codex', 'aider', 'opencode', 'node']);
+  for (const agent of getAgents(config)) {
+    const exe = executableOf(agent.command);
+    if (exe) names.add(exe.split('/').pop());
+  }
+  return names;
 }
 
 module.exports = {
   DEFAULT_AGENTS,
+  RESERVED_KEYS,
+  executableOf,
+  getAgents,
   getAgentsWithStatus,
   resolveAgent,
-  isCommandAvailable
+  getAgentProcessNames,
+  isCommandAvailable: commandExists
 };

@@ -1,256 +1,255 @@
-const { execSync } = require('child_process');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { stripAnsi, colors } = require('./ui');
+const { tmuxQuiet, SESSION_NAME } = require('./exec');
+const { getConfigDir, writeJsonAtomic } = require('./config');
 
-const STATUS_CONFIG_FILE = path.join(
-  process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'),
-  'cli-agent',
-  'statuses.json'
-);
+// Manual statuses (from `cli-agent notify` / hooks) expire after this delay.
+const MANUAL_STATUS_TTL_MS = 60 * 60 * 1000;
+
+function getStatusFile() {
+  return path.join(getConfigDir(), 'statuses.json');
+}
 
 const STATUS_TYPES = {
-  INPUT_REQUIRED: {
-    id: 'input_required',
-    label: 'Action Required',
-    icon: '🔔',
-    ansiColor: colors.brightYellow,
-    bgBadge: '\x1b[43;30m' // black on yellow
-  },
-  RUNNING: {
-    id: 'running',
-    label: 'Running...',
-    icon: '⚡',
-    ansiColor: colors.brightCyan,
-    bgBadge: '\x1b[46;30m' // black on cyan
-  },
-  DONE: {
-    id: 'done',
-    label: 'Done',
-    icon: '✓',
-    ansiColor: colors.brightGreen,
-    bgBadge: '\x1b[42;30m' // black on green
-  },
-  ERROR: {
-    id: 'error',
-    label: 'Error',
-    icon: '✗',
-    ansiColor: colors.brightRed,
-    bgBadge: '\x1b[41;37m' // white on red
-  },
-  RATE_LIMIT: {
-    id: 'rate_limit',
-    label: 'Rate Limit',
-    icon: '⏳',
-    ansiColor: colors.brightMagenta,
-    bgBadge: '\x1b[45;37m' // white on magenta
-  },
-  IDLE: {
-    id: 'idle',
-    label: 'Idle',
-    icon: '●',
-    ansiColor: colors.gray,
-    bgBadge: ''
-  }
+  INPUT_REQUIRED: { id: 'input_required', label: 'Action Required', icon: '🔔', ansiColor: colors.brightYellow },
+  RUNNING: { id: 'running', label: 'Running...', icon: '⚡', ansiColor: colors.brightCyan },
+  DONE: { id: 'done', label: 'Done', icon: '✓', ansiColor: colors.brightGreen },
+  ERROR: { id: 'error', label: 'Error', icon: '✗', ansiColor: colors.brightRed },
+  RATE_LIMIT: { id: 'rate_limit', label: 'Rate Limit', icon: '⏳', ansiColor: colors.brightMagenta },
+  IDLE: { id: 'idle', label: 'Idle', icon: '●', ansiColor: colors.gray }
 };
+
+function statusById(id) {
+  return Object.values(STATUS_TYPES).find(t => t.id === id) || STATUS_TYPES.IDLE;
+}
+
+/** Compact colored badge used by the sidebar and the switcher. */
+function statusBadge(status) {
+  switch (status && status.id) {
+    case 'input_required': return `\x1b[43;30m${colors.bold} 🔔 ACTION \x1b[0m`;
+    case 'running': return `\x1b[46;30m${colors.bold} ⚡ RUN \x1b[0m`;
+    case 'done': return `${colors.brightGreen}✓ Done${colors.reset}`;
+    case 'error': return `\x1b[41;37m${colors.bold} ✗ ERR \x1b[0m`;
+    case 'rate_limit': return `\x1b[45;37m${colors.bold} ⏳ LIMIT \x1b[0m`;
+    default: return `${colors.gray}● Idle${colors.reset}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Manual statuses
+// ---------------------------------------------------------------------------
 
 function loadManualStatuses() {
   try {
-    if (fs.existsSync(STATUS_CONFIG_FILE)) {
-      return JSON.parse(fs.readFileSync(STATUS_CONFIG_FILE, 'utf-8'));
-    }
+    const parsed = JSON.parse(fs.readFileSync(getStatusFile(), 'utf-8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (err) {
-    // Ignore read error
+    return {};
   }
-  return {};
 }
 
-function saveManualStatus(bookmarkIdOrName, statusKey, message = '') {
-  const dir = path.dirname(STATUS_CONFIG_FILE);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+function saveManualStatus(bookmarkKey, statusKey, message = '') {
   const current = loadManualStatuses();
-  current[bookmarkIdOrName] = {
+  current[bookmarkKey] = {
     status: statusKey,
     message,
     updatedAt: new Date().toISOString()
   };
-  fs.writeFileSync(STATUS_CONFIG_FILE, JSON.stringify(current, null, 2), 'utf-8');
+  writeJsonAtomic(getStatusFile(), current);
 }
 
-function getGitInfo(dirPath) {
-  if (!dirPath || !fs.existsSync(dirPath)) return null;
-  const gitDir = path.join(dirPath, '.git');
-  if (!fs.existsSync(gitDir)) return null;
+function clearManualStatus(bookmarkKey) {
+  const current = loadManualStatuses();
+  if (!(bookmarkKey in current)) return;
+  delete current[bookmarkKey];
+  writeJsonAtomic(getStatusFile(), current);
+}
 
-  try {
-    const branch = execSync('git rev-parse --abbrev-ref HEAD 2>/dev/null', {
-      cwd: dirPath,
-      encoding: 'utf-8',
-      timeout: 300
-    }).trim();
+/** Return the manual status entry for a bookmark if it is still fresh. */
+function getManualStatus(statuses, key, now = Date.now()) {
+  const entry = statuses && statuses[key];
+  if (!entry || !entry.status || entry.status === 'idle') return null;
+  const ts = Date.parse(entry.updatedAt);
+  if (Number.isFinite(ts) && now - ts > MANUAL_STATUS_TTL_MS) return null;
+  return entry;
+}
 
-    const statusOutput = execSync('git status --porcelain 2>/dev/null', {
-      cwd: dirPath,
-      encoding: 'utf-8',
-      timeout: 300
-    }).trim();
-
-    const changedCount = statusOutput ? statusOutput.split('\n').filter(Boolean).length : 0;
-    const isDirty = changedCount > 0;
-
-    return {
-      branch,
-      isDirty,
-      changedCount,
-      summary: `${branch}${isDirty ? `* (${changedCount})` : ''}`
-    };
-  } catch (err) {
-    return null;
+/**
+ * Combine a manual status with the auto-detected one.
+ * A manual "running"/"input" status is dropped once the agent is no longer the
+ * foreground process (the agent exited or was interrupted).
+ */
+function resolveStatus(manualEntry, detected, procInfo) {
+  if (manualEntry) {
+    const transient = manualEntry.status === 'running' || manualEntry.status === 'input_required';
+    if (transient && procInfo && !procInfo.isAgent) {
+      return detected;
+    }
+    // Live detection of a blocking prompt always wins over a stale "done".
+    if (detected && detected.id === STATUS_TYPES.INPUT_REQUIRED.id) return detected;
+    return statusById(manualEntry.status);
   }
+  return detected || STATUS_TYPES.IDLE;
 }
 
-function getPaneOutput(targetPane = 'cli_agent:0.1', lineCount = 35) {
-  try {
-    return execSync(`tmux capture-pane -t ${targetPane} -p -S -${lineCount} 2>/dev/null`, {
-      encoding: 'utf-8',
-      timeout: 400
-    });
-  } catch (err) {
-    return '';
+// ---------------------------------------------------------------------------
+// tmux panes
+// ---------------------------------------------------------------------------
+
+/**
+ * One tmux call listing every pane of the session. Returns a map
+ * bookmarkKey -> { paneId, pid, command } where the visible right pane
+ * (window 0, pane 1) is attributed to activeId.
+ */
+function getSessionPanes(activeId) {
+  const out = tmuxQuiet([
+    'list-panes', '-s', '-t', SESSION_NAME,
+    '-F', '#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}'
+  ]);
+  const panes = new Map();
+  let visiblePaneCount = 0;
+  if (out === null) return { panes, visiblePaneCount: -1 };
+
+  for (const line of out.split('\n')) {
+    if (!line.trim()) continue;
+    const [winIndex, winName, paneIndex, paneId, pid, command] = line.split('\t');
+    const info = { paneId, pid: parseInt(pid, 10), command: command || '' };
+    if (winIndex === '0') {
+      visiblePaneCount++;
+      if (paneIndex === '1' && activeId) panes.set(activeId, info);
+    } else if (winName && winName.startsWith('_pane_') && paneIndex === '0') {
+      panes.set(winName.slice('_pane_'.length), info);
+    }
   }
+  return { panes, visiblePaneCount };
 }
 
-function getPaneProcess(targetPane = 'cli_agent:0.1') {
-  try {
-    const pidStr = execSync(`tmux display-message -t ${targetPane} -p '#{pane_pid}' 2>/dev/null`, {
-      encoding: 'utf-8',
-      timeout: 300
-    }).trim();
+function capturePane(paneId, lineCount = 30) {
+  return tmuxQuiet(['capture-pane', '-p', '-t', paneId, '-S', `-${lineCount}`], { timeout: 1000 }) || '';
+}
 
-    if (!pidStr) return null;
-    const pid = parseInt(pidStr, 10);
+function procInfoFromPane(pane, agentNames) {
+  if (!pane) return null;
+  const comm = (pane.command || '').split('/').pop();
+  return { pid: pane.pid, comm, isAgent: agentNames.has(comm) };
+}
 
-    // Look for child process under shell
-    const childStr = execSync(`pgrep -P ${pid} 2>/dev/null | tail -n 1`, {
-      encoding: 'utf-8',
-      timeout: 300
-    }).trim();
+// ---------------------------------------------------------------------------
+// Git
+// ---------------------------------------------------------------------------
 
-    const targetPid = childStr ? parseInt(childStr, 10) : pid;
-    const comm = execSync(`ps -o comm= -p ${targetPid} 2>/dev/null`, {
-      encoding: 'utf-8',
-      timeout: 300
-    }).trim();
-
-    return {
-      pid: targetPid,
-      comm: comm || 'shell',
-      isAgent: ['claude', 'copilot', 'node', 'python', 'python3'].includes(comm)
-    };
-  } catch (err) {
-    return null;
+function parseGitStatus(output) {
+  const lines = String(output || '').split('\n').filter(Boolean);
+  let branch = '';
+  if (lines[0] && lines[0].startsWith('## ')) {
+    const head = lines.shift().slice(3);
+    if (head.startsWith('No commits yet on ')) {
+      branch = head.slice('No commits yet on '.length);
+    } else if (head.startsWith('HEAD (no branch)')) {
+      branch = 'detached';
+    } else {
+      branch = head.split('...')[0].split(' ')[0];
+    }
   }
+  const changedCount = lines.length;
+  return {
+    branch,
+    isDirty: changedCount > 0,
+    changedCount,
+    summary: `${branch}${changedCount ? `* (${changedCount})` : ''}`
+  };
 }
+
+/** Asynchronous git status; calls back with null if not a repo. */
+function getGitInfoAsync(dirPath, callback) {
+  if (!dirPath || !fs.existsSync(path.join(dirPath, '.git'))) {
+    callback(null);
+    return;
+  }
+  execFile(
+    'git',
+    ['-C', dirPath, 'status', '--porcelain', '-b'],
+    { encoding: 'utf-8', timeout: 2000 },
+    (err, stdout) => callback(err ? null : parseGitStatus(stdout))
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Output heuristics (fallback when no hooks are configured)
+// ---------------------------------------------------------------------------
 
 function detectTerminalStatus(paneOutput, procInfo) {
-  if (!paneOutput) {
-    return STATUS_TYPES.IDLE;
-  }
+  if (!paneOutput) return STATUS_TYPES.IDLE;
 
-  const clean = stripAnsi(paneOutput);
-  const lines = clean.split('\n').map(l => l.trim()).filter(Boolean);
+  const lines = stripAnsi(paneOutput).split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length === 0) return STATUS_TYPES.IDLE;
 
-  const recentLines = lines.slice(-5);
-  const recentBottomText = recentLines.join('\n');
+  const recentLines = lines.slice(-6);
+  const recentText = recentLines.join('\n');
   const fullRecent = lines.slice(-15).join('\n');
+  const agentActive = Boolean(procInfo && procInfo.isAgent);
 
-  // 1. Check for Rate Limit / Quota warnings
-  if (
-    /rate limit reached|quota exceeded|too many requests|please wait \d+s/i.test(fullRecent)
-  ) {
+  // 1. Rate limit / quota
+  if (/rate limit reached|quota exceeded|too many requests|usage limit reached|please wait \d+s/i.test(fullRecent)) {
     return STATUS_TYPES.RATE_LIMIT;
   }
 
-  // 2. Real confirmation prompt waiting on the active bottom lines
-  const isActionRequired = recentLines.some(line => {
-    // Check if line starts with question prompt or ends with (y/n)
-    if (/^\s*\?\s+(allow|approve|do you want|would you like|execute|run|confirm|select|proceed)/i.test(line)) return true;
-    if (/\((y\/n|yes\/no)\)\s*$/i.test(line) || /\[(y\/n|y\/N|Y\/n)\]\s*$/i.test(line)) return true;
-    if (/waiting for (user|confirmation|approval|input)/i.test(line)) return true;
-    return false;
-  });
-
-  if (isActionRequired) {
+  // 2. Blocking confirmation prompt on the last lines
+  // Claude Code permission dialogs end with a numbered "1. Yes / 2. ... No" menu.
+  const promptWindow = lines.slice(-10).join('\n');
+  if (/^\s*[❯>]?\s*1\.\s*Yes\b/m.test(promptWindow) && /^\s*[❯>]?\s*[23]\.\s*(Yes|No)\b/m.test(promptWindow)) {
     return STATUS_TYPES.INPUT_REQUIRED;
   }
+  const isActionRequired = recentLines.some(line =>
+    /^\s*\?\s+(allow|approve|do you want|would you like|execute|run|confirm|select|proceed)/i.test(line) ||
+    /\((y\/n|yes\/no)\)\s*:?\s*$/i.test(line) ||
+    /\[(y\/n|y\/N|Y\/n)\]\s*:?\s*$/.test(line) ||
+    /waiting for (user|confirmation|approval)/i.test(line)
+  );
+  if (isActionRequired) return STATUS_TYPES.INPUT_REQUIRED;
 
-  // 3. Task Completion (Claude Code "· done 9:12 PM", "done in 2s", "Task complete", etc.)
-  if (
-    /·\s*done\b|done\s+\d+:\d+|done in \d+|completed successfully|task complete|\bcost:\s*\$|\btokens:\s*\d+/i.test(fullRecent)
-  ) {
-    return STATUS_TYPES.DONE;
+  // 3. Agent actively working (Claude Code shows "esc to interrupt")
+  if (agentActive && /esc to interrupt|thinking…|thinking\.\.\.|\(\d+s\s*·/i.test(recentText)) {
+    return STATUS_TYPES.RUNNING;
   }
 
-  // 4. Errors in recent lines
+  // 4. Errors on the very last lines
   const errorPatterns = [
     /fatal:\s+/i,
     /command failed/i,
     /uncaught exception/i,
-    /npm ERR!/i,
-    /Traceback \(most recent call last\):/i,
+    /npm ERR!/,
+    /Traceback \(most recent call last\):/,
     /build failed/i
   ];
+  const tail = recentLines.slice(-3).join(' ');
+  if (errorPatterns.some(p => p.test(tail))) return STATUS_TYPES.ERROR;
 
-  for (const pat of errorPatterns) {
-    if (pat.test(recentLines.slice(-3).join(' '))) {
-      return STATUS_TYPES.ERROR;
-    }
-  }
-
-  // 5. Active running agent (Claude Code / Copilot actively thinking or executing)
-  if (procInfo && procInfo.isAgent) {
-    if (/thinking\.\.\.|saut[ée]ing|cooking|brewing|generating|executing|searching|reading|editing/i.test(recentBottomText)) {
-      return STATUS_TYPES.RUNNING;
-    }
+  // 5. Completion markers
+  if (/·\s*done\b|done in \d+|completed successfully|task complete|\btotal cost:\s*\$/i.test(fullRecent)) {
+    return STATUS_TYPES.DONE;
   }
 
   return STATUS_TYPES.IDLE;
 }
 
-function getPaneOutputForBookmark(bookmarkId, activeId, lineCount = 35) {
-  const safeId = typeof bookmarkId === 'object' && bookmarkId
-    ? (bookmarkId.id || bookmarkId.name || 'default')
-    : String(bookmarkId || 'default');
-  const cleanKey = safeId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const target = (cleanKey === activeId)
-    ? 'cli_agent:0.1'
-    : `cli_agent:_pane_${cleanKey}.0`;
-  return getPaneOutput(target, lineCount);
-}
-
-function getPaneProcessForBookmark(bookmarkId, activeId) {
-  const safeId = typeof bookmarkId === 'object' && bookmarkId
-    ? (bookmarkId.id || bookmarkId.name || 'default')
-    : String(bookmarkId || 'default');
-  const cleanKey = safeId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const target = (cleanKey === activeId)
-    ? 'cli_agent:0.1'
-    : `cli_agent:_pane_${cleanKey}.0`;
-  return getPaneProcess(target);
-}
-
 module.exports = {
+  MANUAL_STATUS_TTL_MS,
   STATUS_TYPES,
+  statusById,
+  statusBadge,
+  getStatusFile,
   loadManualStatuses,
   saveManualStatus,
-  getGitInfo,
-  getPaneOutput,
-  getPaneProcess,
-  getPaneOutputForBookmark,
-  getPaneProcessForBookmark,
+  clearManualStatus,
+  getManualStatus,
+  resolveStatus,
+  getSessionPanes,
+  capturePane,
+  procInfoFromPane,
+  parseGitStatus,
+  getGitInfoAsync,
   detectTerminalStatus
 };
