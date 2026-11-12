@@ -1,0 +1,30 @@
+{
+  "name": "cli-agent",
+  "version": "1.0.0",
+  "description": "Terminal workspace manager with split-pane bookmarks for launching AI agents (Claude Code, Copilot, etc.) in project directories",
+  "main": "src/index.js",
+  "bin": {
+    "cli-agent": "./bin/cli-agent.js"
+  },
+  "scripts": {
+    "start": "node bin/cli-agent.js",
+    "sidebar": "node bin/cli-agent.js --sidebar"
+  },
+  "keywords": [
+    "cli",
+    "agent",
+    "ai",
+    "claude-code",
+    "copilot",
+    "workspace",
+    "bookmarks",
+    "terminal",
+    "tmux",
+    "developer-tools"
+  ],
+  "author": "juliendevelopment",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
