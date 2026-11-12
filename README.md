@@ -100,6 +100,7 @@ CLI-Agent runs on its own tmux server (`tmux -L cli-agent`), so these shortcuts 
 | `Enter` | Switch view to selected project's independent terminal |
 | `c` | Switch to project & launch **Claude Code** (`claude`) |
 | `p` | Switch to project & launch **GitHub Copilot CLI** (`copilot`) |
+| `g` / `x` / `n` | Switch to project & launch **Antigravity CLI** (`agy`) / **Codex** / **OpenCode** |
 | `s` | Same as `Enter` |
 | `Space` / `o` | Open interactive agent selector modal |
 | `a` | Add a new bookmark (interactive dialog) |
@@ -122,7 +123,7 @@ CLI-Agent runs on its own tmux server (`tmux -L cli-agent`), so these shortcuts 
 
 ## 🚦 Live Statuses & Notifications
 
-CLI-Agent monitors active processes and terminal outputs in real time, displaying colored indicators next to your bookmarks. For **Claude Code**, install the hooks (see below) so statuses come from Claude Code itself instead of being guessed from the terminal output.
+CLI-Agent monitors active processes and terminal outputs in real time, displaying colored indicators next to your bookmarks. Install the agent hooks (see below) so statuses come from the agents themselves instead of being guessed from the terminal output.
 
 | Badge | Color | Description / Trigger |
 |---|---|---|
@@ -134,14 +135,30 @@ CLI-Agent monitors active processes and terminal outputs in real time, displayin
 | `● Idle` | ⚪ **Gray** | Shell prompt idle and ready for commands. |
 | ` main*` | Gray / 🟡 **Yellow `*`** | Git branch name; `*` when there are uncommitted changes. |
 
-### Claude Code Hooks (Recommended)
+### Agent Status Hooks (Recommended)
+
+By default CLI-Agent **guesses** each agent's status by reading its screen (e.g. `esc to interrupt` → running, `1. Yes / 2. No` → waiting for you). That breaks whenever an agent changes its display.
+
+With hooks, the **agent itself tells CLI-Agent** what it is doing: each agent runs `cli-agent notify --hook running|input|done` at the right moment. One command sets it up for every agent installed on your machine:
 
 ```bash
-cli-agent hooks            # print the hooks configuration
-cli-agent hooks --install  # add it to ~/.claude/settings.json (a backup is saved first)
+cli-agent hooks              # show which agents are found / set up
+cli-agent hooks --install    # set up every agent found (or: --install claude,agy)
+cli-agent hooks --uninstall  # remove everything CLI-Agent added
 ```
 
-Claude Code then calls `cli-agent notify` when you submit a prompt or a tool runs (`running`), when it waits for a permission or an answer (`input`), and when it finishes (`done`). Restart running Claude Code sessions afterwards.
+| Agent | What is installed | ⚡ Running | 🔔 Action required | ✓ Done |
+|---|---|---|---|---|
+| Claude Code | hooks in `~/.claude/settings.json` | ✅ | ✅ permission / question | ✅ |
+| Codex | hooks in `~/.codex/hooks.json` ¹ | ✅ | ✅ permission | ✅ |
+| Copilot CLI | `~/.copilot/hooks/cli-agent.json` | ✅ | ✅ permission | ✅ |
+| Antigravity CLI (`agy`) | group `cli-agent` in `~/.gemini/config/hooks.json` | ✅ | screen detection ² | ✅ |
+| OpenCode | plugin `~/.config/opencode/plugins/cli-agent.js` | ✅ | ✅ permission | ✅ |
+
+¹ Codex skips new hooks until you trust them: run `/hooks` once inside Codex.
+² agy has no "permission requested" hook, so that state still comes from the screen.
+
+Restart running agent sessions (and OpenCode's background service) after installing. Files shared with your own settings are backed up once to `<file>.cli-agent.bak`; your own hooks are left untouched.
 
 ### Scriptable Notifications
 
@@ -244,7 +261,7 @@ Example:
 ```
 
 - `switcherKey`: tmux key name for the quick switcher (`C-e`, `M-s`, `F5`…). Restart with `cli-agent kill && cli-agent` to apply.
-- `agents`: extra agents, or overrides of the built-in ones (`claude`, `copilot`, `shell`) by `id`. A `shortcut` is a single key; keys used by the sidebar (`a d e j k o q r s w`…) are ignored.
+- `agents`: extra agents, or overrides of the built-in ones (`claude`, `copilot`, `agy`, `codex`, `opencode`, `shell`) by `id`. A `shortcut` is a single key; keys used by the sidebar (`a d e j k o q r s w`…) are ignored.
 
 ---
 

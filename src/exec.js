@@ -40,29 +40,25 @@ function shQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-/** Look up an executable in PATH (no dependency on `which`). */
-function commandExists(cmd) {
-  if (!cmd) return false;
-  if (cmd.includes('/')) {
-    try {
-      fs.accessSync(cmd, fs.constants.X_OK);
-      return true;
-    } catch (err) {
-      return false;
-    }
-  }
-  const dirs = (process.env.PATH || '').split(path.delimiter);
-  for (const dir of dirs) {
-    if (!dir) continue;
-    const candidate = path.join(dir, cmd);
+/** Full path of an executable found in PATH, or null (no dependency on `which`). */
+function resolveCommand(cmd) {
+  if (!cmd) return null;
+  const candidates = cmd.includes('/')
+    ? [cmd]
+    : (process.env.PATH || '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, cmd));
+  for (const candidate of candidates) {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
-      if (fs.statSync(candidate).isFile()) return true;
+      if (fs.statSync(candidate).isFile()) return candidate;
     } catch (err) {
       // not here
     }
   }
-  return false;
+  return null;
+}
+
+function commandExists(cmd) {
+  return resolveCommand(cmd) !== null;
 }
 
 module.exports = {
@@ -72,5 +68,6 @@ module.exports = {
   tmuxQuiet,
   tmuxInteractive,
   shQuote,
+  resolveCommand,
   commandExists
 };

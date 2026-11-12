@@ -43,7 +43,9 @@ ${colors.bold}USAGE:${colors.reset}
   cli-agent notify <name|index|path> <status> [message]
                                         Set a status: input, running, done, error, rate_limit, clear
                                         (--quiet: exit 0 silently if no bookmark matches)
-  cli-agent hooks [--install]           Show / install Claude Code hooks for reliable statuses
+  cli-agent hooks [--install|--uninstall] [agents]
+                                        Let Claude Code, Codex, Copilot, agy and OpenCode
+                                        report their status (instead of guessing it)
   cli-agent doctor                      Check dependencies and configuration
   cli-agent update                      Update to the latest GitHub release
   cli-agent uninstall [--yes] [--purge] Remove CLI-Agent (--purge also deletes the config)
@@ -156,13 +158,54 @@ const STATUS_ALIASES = {
   clear: 'clear'
 };
 
+/** Read the JSON payload an agent hook sends on stdin (if any). */
+function readHookPayload() {
+  if (process.stdin.isTTY) return {};
+  try {
+    const raw = fs.readFileSync(0, 'utf-8');
+    const data = raw.trim() ? JSON.parse(raw) : {};
+    return data && typeof data === 'object' ? data : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+/**
+ * Find the bookmark a hook is reporting for:
+ * 1. the CLI-Agent tmux pane the agent runs in ($TMUX_PANE),
+ * 2. the project directory from the hook payload / environment.
+ */
+function findHookBookmark(config) {
+  const { isInsideCliAgent } = require('./tmux');
+  const { bookmarkKeyForPane } = require('./monitor');
+  if (isInsideCliAgent() && process.env.TMUX_PANE) {
+    const key = bookmarkKeyForPane(process.env.TMUX_PANE);
+    const bm = key && config.bookmarks.find(b => getBookmarkKey(b) === key);
+    if (bm) return bm;
+  }
+  const payload = readHookPayload();
+  const reported = [
+    payload.cwd,
+    ...(Array.isArray(payload.workspacePaths) ? payload.workspacePaths : []),
+    process.env.CLAUDE_PROJECT_DIR
+  ].filter(d => typeof d === 'string' && d);
+  // Only fall back to our own cwd when the agent told us nothing: agy, for
+  // instance, runs hooks from ~/.gemini/config.
+  const candidates = reported.length ? reported : [process.cwd()];
+  for (const dir of candidates) {
+    if (typeof dir === 'string' && path.isAbsolute(dir)) {
+      const bm = findBookmark(config, dir);
+      if (bm) return bm;
+    }
+  }
+  return null;
+}
+
 function handleNotify(rawArgs) {
   const { saveManualStatus, clearManualStatus } = require('./monitor');
-  const quiet = rawArgs.includes('--quiet') || rawArgs.includes('-q');
-  const args = rawArgs.filter(a => a !== '--quiet' && a !== '-q');
-  const target = args[0];
-  const rawStatus = (args[1] || '').toLowerCase();
-  const message = args.slice(2).join(' ');
+  const hook = rawArgs.includes('--hook');
+  const quiet = hook || rawArgs.includes('--quiet') || rawArgs.includes('-q');
+  const args = rawArgs.filter(a => !['--quiet', '-q', '--hook'].includes(a));
 
   const fail = msg => {
     if (quiet) process.exit(0);
@@ -170,15 +213,22 @@ function handleNotify(rawArgs) {
     process.exit(1);
   };
 
-  if (!target || !rawStatus) {
+  // --hook <status>: the bookmark is found from the pane / payload
+  const target = hook ? null : args[0];
+  const rawStatus = String((hook ? args[0] : args[1]) || '').toLowerCase();
+  const message = args.slice(hook ? 1 : 2).join(' ');
+
+  if ((!hook && !target) || !rawStatus) {
     fail('Syntax: cli-agent notify <name|index|path> <status> [message]\n' +
+      '        cli-agent notify --hook <status>   (from an agent hook)\n' +
       'Statuses: input, running, done, error, rate_limit, clear');
   }
 
   const statusKey = STATUS_ALIASES[rawStatus];
   if (!statusKey) fail(`Unknown status "${rawStatus}". Use: input, running, done, error, rate_limit, clear`);
 
-  const bookmark = findBookmark(loadConfig(), target);
+  const config = loadConfig();
+  const bookmark = hook ? findHookBookmark(config) : findBookmark(config, target);
   if (!bookmark) fail(`Bookmark not found: ${target}`);
 
   const key = getBookmarkKey(bookmark);
@@ -194,68 +244,66 @@ function handleNotify(rawArgs) {
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code hooks
+// Agent status integrations (hooks / plugins)
 // ---------------------------------------------------------------------------
 
-function notifyCommand(status) {
-  const base = commandExists('cli-agent')
-    ? 'cli-agent'
-    : `${shQuote(process.execPath)} ${shQuote(ENTRYPOINT)}`;
-  return `${base} notify --quiet "$CLAUDE_PROJECT_DIR" ${status}`;
-}
-
-function buildHooks() {
-  const entry = status => [{ hooks: [{ type: 'command', command: notifyCommand(status) }] }];
-  return {
-    UserPromptSubmit: entry('running'),
-    PostToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: notifyCommand('running') }] }],
-    // Only real blocking prompts (not the "idle for 60s" reminder)
-    Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: [{ type: 'command', command: notifyCommand('input') }] }],
-    Stop: entry('done')
-  };
-}
-
-function isOurHook(group) {
-  return Array.isArray(group && group.hooks) &&
-    group.hooks.some(h => typeof h.command === 'string' && /cli-agent(\.js)?'?\s+notify\b/.test(h.command));
+function selectIntegrations(names, { detectedOnly }) {
+  const { INTEGRATIONS, getIntegration } = require('./integrations');
+  if (names.length === 0) return INTEGRATIONS.filter(i => !detectedOnly || i.detect());
+  return names.map(n => {
+    const integ = getIntegration(n);
+    if (!integ) {
+      console.error(`${colors.red}Unknown agent "${n}". Available: ${INTEGRATIONS.map(i => i.id).join(', ')}${colors.reset}`);
+      process.exit(1);
+    }
+    return integ;
+  });
 }
 
 function handleHooks(args) {
-  const hooks = buildHooks();
-  const settingsFile = path.join(os.homedir(), '.claude', 'settings.json');
+  const { INTEGRATIONS } = require('./integrations');
+  const names = args.filter(a => !a.startsWith('-')).flatMap(a => a.split(',')).filter(Boolean);
 
-  if (!args.includes('--install')) {
-    console.log(`\n${colors.bold}Claude Code hooks for CLI-Agent${colors.reset}`);
-    console.log(`Add this to ${shrinkPath(settingsFile)} (or run ${colors.cyan}cli-agent hooks --install${colors.reset}):\n`);
-    console.log(JSON.stringify({ hooks }, null, 2));
-    console.log(`\n${colors.gray}Statuses are then reported by Claude Code itself instead of being guessed from the terminal output.${colors.reset}\n`);
+  if (args.includes('--install') || args.includes('--uninstall')) {
+    const install = args.includes('--install');
+    const targets = selectIntegrations(names, { detectedOnly: install });
+    if (targets.length === 0) {
+      console.log('No supported agent found on this machine.');
+      return;
+    }
+    console.log('');
+    for (const integ of targets) {
+      try {
+        if (install) {
+          integ.install();
+          console.log(`  ${colors.green}✓${colors.reset} ${integ.name.padEnd(16)} ${colors.gray}${shrinkPath(integ.file())}${colors.reset}`);
+          if (integ.note) console.log(`    ${colors.gray}${integ.note}${colors.reset}`);
+        } else {
+          const removed = integ.uninstall();
+          console.log(`  ${removed ? `${colors.green}✓${colors.reset}` : `${colors.gray}-${colors.reset}`} ${integ.name.padEnd(16)} ${colors.gray}${removed ? 'removed' : 'nothing to remove'}${colors.reset}`);
+        }
+      } catch (err) {
+        console.log(`  ${colors.red}✗${colors.reset} ${integ.name.padEnd(16)} ${err.message}`);
+      }
+    }
+    console.log('');
     return;
   }
 
-  let settings = {};
-  if (fs.existsSync(settingsFile)) {
-    const raw = fs.readFileSync(settingsFile, 'utf-8');
-    try {
-      settings = JSON.parse(raw);
-    } catch (err) {
-      console.error(`${colors.red}${settingsFile} is not valid JSON; not modifying it.${colors.reset}`);
-      process.exit(1);
-    }
-    const backup = `${settingsFile}.bak-${Date.now()}`;
-    fs.writeFileSync(backup, raw, 'utf-8');
-    console.log(`${colors.gray}Backup saved to ${shrinkPath(backup)}${colors.reset}`);
+  console.log(`\n${colors.bold}Agent status integrations${colors.reset}`);
+  console.log(`${colors.gray}Each agent reports its own status (working / waiting for you / done) to CLI-Agent,`);
+  console.log(`instead of CLI-Agent guessing it from the screen.${colors.reset}\n`);
+  for (const integ of INTEGRATIONS) {
+    const detected = integ.detect();
+    const installed = integ.isInstalled();
+    const [label, color] = installed
+      ? ['installed', colors.green]
+      : (detected ? ['not installed', colors.yellow] : ['agent not found', colors.gray]);
+    console.log(`  ${integ.id.padEnd(10)} ${integ.name.padEnd(16)} ${color}${label.padEnd(16)}${colors.reset} ${colors.gray}${shrinkPath(integ.file())}${colors.reset}`);
   }
-
-  settings.hooks = settings.hooks && typeof settings.hooks === 'object' ? settings.hooks : {};
-  for (const [event, groups] of Object.entries(hooks)) {
-    const existing = Array.isArray(settings.hooks[event]) ? settings.hooks[event].filter(g => !isOurHook(g)) : [];
-    settings.hooks[event] = [...existing, ...groups];
-  }
-
-  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
-  console.log(`${colors.green}✓ Hooks installed in ${shrinkPath(settingsFile)}${colors.reset}`);
-  console.log(`${colors.gray}Restart running Claude Code sessions to pick them up.${colors.reset}\n`);
+  console.log(`\n  ${colors.cyan}cli-agent hooks --install${colors.reset}            install for every agent found`);
+  console.log(`  ${colors.cyan}cli-agent hooks --install claude,agy${colors.reset} only some agents`);
+  console.log(`  ${colors.cyan}cli-agent hooks --uninstall${colors.reset}          remove everything CLI-Agent added\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,16 +351,12 @@ function handleDoctor() {
   if (commandExists('cli-agent')) ok('cli-agent is in PATH');
   else warn('cli-agent is not in PATH (add ~/.local/bin to PATH)');
 
-  const settingsFile = path.join(os.homedir(), '.claude', 'settings.json');
-  let hooksInstalled = false;
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
-    hooksInstalled = Object.values(settings.hooks || {}).some(groups => Array.isArray(groups) && groups.some(isOurHook));
-  } catch (err) {
-    // no settings
+  const { INTEGRATIONS } = require('./integrations');
+  for (const integ of INTEGRATIONS) {
+    if (!integ.detect()) continue;
+    if (integ.isInstalled()) ok(`${integ.name}: status hooks installed`);
+    else warn(`${integ.name}: status hooks not installed (run: cli-agent hooks --install)`);
   }
-  if (hooksInstalled) ok('Claude Code hooks installed');
-  else warn('Claude Code hooks not installed (run: cli-agent hooks --install)');
 
   console.log(problems ? `\n${colors.red}${problems} problem(s) found.${colors.reset}\n` : `\n${colors.green}All good.${colors.reset}\n`);
   if (problems) process.exit(1);
@@ -388,6 +432,14 @@ function handleUninstall(args) {
   }
 
   killSession();
+  const { INTEGRATIONS } = require('./integrations');
+  for (const integ of INTEGRATIONS) {
+    try {
+      if (integ.uninstall()) console.log(`  ${colors.gray}Removed ${integ.name} status hooks${colors.reset}`);
+    } catch (err) {
+      // leave a file we cannot parse untouched
+    }
+  }
   for (const t of targets) fs.rmSync(t, { recursive: true, force: true });
   console.log(`\n${colors.green}✓ CLI-Agent uninstalled.${colors.reset}\n`);
 }
@@ -462,4 +514,4 @@ function main() {
   }
 }
 
-module.exports = { main, buildHooks, isOurHook, STATUS_ALIASES };
+module.exports = { main, STATUS_ALIASES };

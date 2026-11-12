@@ -126,6 +126,16 @@ function getSessionPanes(activeId) {
   return { panes, visiblePaneCount };
 }
 
+/** Bookmark key of the session that owns a tmux pane id (e.g. "%3"), or null. */
+function bookmarkKeyForPane(paneId) {
+  const activeId = (tmuxQuiet(['show-options', '-t', SESSION_NAME, '-qv', '@active_bookmark_id']) || '').trim() || null;
+  const { panes } = getSessionPanes(activeId);
+  for (const [key, info] of panes) {
+    if (info.paneId === paneId) return key;
+  }
+  return null;
+}
+
 function capturePane(paneId, lineCount = 30) {
   return tmuxQuiet(['capture-pane', '-p', '-t', paneId, '-S', `-${lineCount}`], { timeout: 1000 }) || '';
 }
@@ -211,7 +221,7 @@ function detectTerminalStatus(paneOutput, procInfo) {
   if (isActionRequired) return STATUS_TYPES.INPUT_REQUIRED;
 
   // 3. Agent actively working (Claude Code shows "esc to interrupt")
-  if (agentActive && /esc to interrupt|thinking…|thinking\.\.\.|\(\d+s\s*·/i.test(recentText)) {
+  if (agentActive && /esc to (interrupt|cancel)|thinking…|thinking\.\.\.|\(\d+s\s*·/i.test(recentText)) {
     return STATUS_TYPES.RUNNING;
   }
 
@@ -247,6 +257,7 @@ module.exports = {
   getManualStatus,
   resolveStatus,
   getSessionPanes,
+  bookmarkKeyForPane,
   capturePane,
   procInfoFromPane,
   parseGitStatus,

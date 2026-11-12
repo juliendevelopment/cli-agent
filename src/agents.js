@@ -16,6 +16,27 @@ const DEFAULT_AGENTS = [
     description: 'GitHub Copilot CLI'
   },
   {
+    id: 'agy',
+    name: 'Antigravity CLI',
+    command: 'agy',
+    shortcut: 'g',
+    description: 'Google Antigravity CLI'
+  },
+  {
+    id: 'codex',
+    name: 'Codex',
+    command: 'codex',
+    shortcut: 'x',
+    description: 'OpenAI Codex CLI'
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    command: 'opencode',
+    shortcut: 'n',
+    description: 'OpenCode'
+  },
+  {
     id: 'shell',
     name: 'Terminal Shell',
     command: '',
@@ -82,7 +103,7 @@ function resolveAgent(agentId, config = {}) {
 
 /** Process names that identify an agent running in the foreground. */
 function getAgentProcessNames(config = {}) {
-  const names = new Set(['claude', 'copilot', 'gemini', 'codex', 'aider', 'opencode', 'node']);
+  const names = new Set(['claude', 'copilot', 'agy', 'gemini', 'codex', 'aider', 'opencode', 'node']);
   for (const agent of getAgents(config)) {
     const exe = executableOf(agent.command);
     if (exe) names.add(exe.split('/').pop());

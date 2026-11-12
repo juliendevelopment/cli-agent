@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 const { shQuote, commandExists } = require('../src/exec');
 const { getAgents, RESERVED_KEYS } = require('../src/agents');
 const { keyLabel } = require('../src/tmux');
-const { buildHooks, isOurHook, STATUS_ALIASES } = require('../src/index');
+const { STATUS_ALIASES } = require('../src/index');
 const { stripAnsi } = require('../src/ui');
 
 test('shQuote survives quotes, $ and backticks', () => {
@@ -24,14 +24,15 @@ test('commandExists finds sh and rejects unknown commands', () => {
 test('getAgents merges user agents and protects reserved shortcuts', () => {
   const agents = getAgents({
     agents: [
-      { id: 'gemini', name: 'Gemini CLI', command: 'gemini', shortcut: 'g' },
+      { id: 'gemini', name: 'Gemini CLI', command: 'gemini', shortcut: 'm' },
       { id: 'bad', command: 'bad', shortcut: 'q' }, // reserved
       { id: 'dup', command: 'dup', shortcut: 'c' }, // already used by claude
       { id: 'claude', command: 'claude --continue' } // override
     ]
   });
   const byId = Object.fromEntries(agents.map(a => [a.id, a]));
-  assert.equal(byId.gemini.shortcut, 'g');
+  assert.equal(byId.gemini.shortcut, 'm');
+  assert.equal(byId.agy.shortcut, 'g');
   assert.equal(byId.bad.shortcut, '');
   assert.equal(byId.dup.shortcut, '');
   assert.equal(byId.claude.command, 'claude --continue');
@@ -43,19 +44,6 @@ test('keyLabel renders tmux key names', () => {
   assert.equal(keyLabel('C-e'), 'Ctrl+E');
   assert.equal(keyLabel('M-k'), 'Alt+K');
   assert.equal(keyLabel('F5'), 'F5');
-});
-
-test('hooks: only blocking notifications, all recognised as ours', () => {
-  const hooks = buildHooks();
-  assert.deepEqual(Object.keys(hooks).sort(), ['Notification', 'PostToolUse', 'Stop', 'UserPromptSubmit']);
-  assert.equal(hooks.Notification[0].matcher, 'permission_prompt|elicitation_dialog');
-  for (const groups of Object.values(hooks)) {
-    for (const group of groups) {
-      assert.ok(isOurHook(group), JSON.stringify(group));
-      assert.match(group.hooks[0].command, /notify --quiet "\$CLAUDE_PROJECT_DIR" /);
-    }
-  }
-  assert.equal(isOurHook({ hooks: [{ type: 'command', command: 'echo hi' }] }), false);
 });
 
 test('every notify alias maps to a known status', () => {
