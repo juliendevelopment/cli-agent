@@ -74,7 +74,20 @@ cli-agent
 
 ---
 
-### Keyboard Shortcuts (Sidebar Menu)
+### Global Shortcuts (Usable Anywhere, Even Inside Terminal)
+
+| Shortcut | Action |
+|---|---|
+| **`Ctrl + E`** (or `Alt + E`) | **IntelliJ-Style Quick Switcher Popup**: Shows all sessions with status. The previous session is pre-selected — press `Enter` to instantly toggle between your last 2 sessions! Use `↑`/`↓` to pick any project. |
+| **`Alt + ←`** or **`Alt + h`** | **Jump to Sidebar**: Returns keyboard focus from the right terminal back to the left sidebar menu. |
+| **`Alt + →`** or **`Alt + l`** | **Jump to Terminal**: Focuses the active terminal pane. |
+| **`F1` / `F2`** | Toggle focus between left sidebar (`F1`) and right terminal (`F2`). |
+| **`F3`** | Toggle mouse capture on/off (for easy native text selection without Shift). |
+| **`Shift` + Drag** | Native host terminal text selection & copy (`Ctrl + Shift + C`). |
+
+---
+
+### Sidebar Shortcuts (When Sidebar is Focused)
 
 | Shortcut | Action |
 |---|---|
@@ -89,9 +102,7 @@ cli-agent
 | `r` | Reset / clear status badge |
 | `<` / `>` or `[` / `]` | **Resize sidebar width** (shrink / expand by 2 cols) |
 | `w` | **Cycle width presets** (24, 30, 38 cols) |
-| `Tab` or `Alt + →` | Switch focus directly to the terminal pane |
-| `Alt + ←` or `F1` | Switch focus back to the sidebar menu |
-| `Alt + [` / `Alt + ]` | Resize sidebar from terminal pane |
+| `Tab` | Switch focus directly to the terminal pane |
 | `q` | Quit CLI-Agent cleanly |
 
 > 💡 **Mouse Support & Text Selection**:

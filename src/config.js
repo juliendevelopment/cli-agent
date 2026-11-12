@@ -141,6 +141,27 @@ function updateBookmark(index, updates) {
   return null;
 }
 
+function getRecentHistory() {
+  const config = loadConfig();
+  if (!Array.isArray(config.recentHistory)) {
+    config.recentHistory = [];
+  }
+  return config.recentHistory;
+}
+
+function recordActiveSession(sessionId) {
+  if (!sessionId) return;
+  const config = loadConfig();
+  if (!Array.isArray(config.recentHistory)) {
+    config.recentHistory = [];
+  }
+  config.recentHistory = config.recentHistory.filter(id => id !== sessionId);
+  config.recentHistory.unshift(sessionId);
+  config.recentHistory = config.recentHistory.slice(0, 20);
+  config.activeBookmarkId = sessionId;
+  saveConfig(config);
+}
+
 module.exports = {
   getConfigDir,
   getConfigFile,
@@ -150,5 +171,7 @@ module.exports = {
   saveConfig,
   addBookmark,
   removeBookmark,
-  updateBookmark
+  updateBookmark,
+  getRecentHistory,
+  recordActiveSession
 };

@@ -2,6 +2,7 @@ const path = require('path');
 const { loadConfig, addBookmark, removeBookmark, shrinkPath, resolvePath } = require('./config');
 const { startWorkspace, killSession, sessionExists, isInsideTmux } = require('./tmux');
 const { runSidebar } = require('./sidebar');
+const { runSwitcher } = require('./switcher');
 const { colors } = require('./ui');
 
 function printHelp() {
@@ -18,6 +19,14 @@ ${colors.bold}USAGE:${colors.reset}
   cli-agent kill                 Close active CLI-Agent tmux session
   cli-agent help                 Display this help message
 
+${colors.bold}GLOBAL SHORTCUTS (ANYWHERE IN TERMINAL):${colors.reset}
+  Ctrl + E       IntelliJ-style Quick Switcher popup (Enter = toggle last 2 sessions!)
+  Alt + ← / M-h  Jump back to sidebar menu from the right terminal
+  Alt + → / M-l  Jump from sidebar to terminal pane
+  F1 / F2        Toggle focus between sidebar and terminal
+  F3             Toggle mouse capture on/off (for easy native text selection)
+  Shift + Drag   Select text natively and copy with Ctrl+Shift+C
+
 ${colors.bold}IN THE TERMINAL SIDEBAR:${colors.reset}
   ↑ / ↓          Navigate bookmarks
   Enter          Open selected directory in the right terminal
@@ -25,9 +34,9 @@ ${colors.bold}IN THE TERMINAL SIDEBAR:${colors.reset}
   p              Launch GitHub Copilot in the directory
   a              Add a new bookmark interactively
   d              Delete selected bookmark
+  < / >          Shrink / expand sidebar width
+  w              Cycle width presets (24, 30, 38 cols)
   r              Reset / clear live status
-  Tab / Alt+→    Switch focus to terminal pane
-  Alt+← / Click  Return focus to sidebar menu
   q              Quit CLI-Agent
 `);
 }
@@ -189,6 +198,10 @@ function main() {
   switch (cmd) {
     case '--sidebar':
       runSidebar();
+      break;
+    case '--switcher':
+    case 'switcher':
+      runSwitcher();
       break;
     case 'list':
     case 'ls':

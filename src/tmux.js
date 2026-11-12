@@ -1,5 +1,6 @@
 const { execSync, spawnSync } = require('child_process');
 const path = require('path');
+const { recordActiveSession } = require('./config');
 
 const SESSION_NAME = 'cli_agent';
 const DEFAULT_SIDEBAR_WIDTH = 26;
@@ -111,6 +112,7 @@ function switchToBookmark(targetBookmark, agentCommand = '', focus = true) {
   }
 
   activeBookmarkId = targetId;
+  recordActiveSession(targetId);
 
   if (focus) {
     focusPane(1);
@@ -218,14 +220,20 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
   execSync(`tmux set-option -t ${SESSION_NAME} status-left "#[bold,fg=#89b4fa] 🤖 CLI-AGENT #[default]│ "`);
   execSync(`tmux set-option -t ${SESSION_NAME} status-left-length 30`);
   execSync(
-    `tmux set-option -t ${SESSION_NAME} status-right "#[fg=#a6adc8]Tab: Term │ Alt+←: Menu │ Shift+Drag: Copy │ F3: Mouse #[default]"`
+    `tmux set-option -t ${SESSION_NAME} status-right "#[fg=#a6adc8]Ctrl+E: Switcher │ Alt+←/Alt+h: Menu │ F3: Mouse #[default]"`
   );
   execSync(`tmux set-option -t ${SESSION_NAME} pane-border-style "fg=#313244"`);
   execSync(`tmux set-option -t ${SESSION_NAME} pane-active-border-style "fg=#89b4fa"`);
 
-  // 5. Quick navigation & resize bindings
+  // 5. Quick navigation, switcher & resize bindings
+  const switcherCmd = `display-popup -w 56 -h 15 -b rounded -s "bg=#1e1e2e,fg=#cdd6f4" -S "fg=#89b4fa" -T " Recent Sessions (Ctrl+E) " -E '${nodeBin} "${sidebarScript}" --switcher'`;
+  execSync(`tmux bind-key -n C-e ${switcherCmd}`);
+  execSync(`tmux bind-key -n M-e ${switcherCmd}`);
+
   execSync(`tmux bind-key -n M-Left select-pane -t ${SESSION_NAME}:0.0`);
   execSync(`tmux bind-key -n M-Right select-pane -t ${SESSION_NAME}:0.1`);
+  execSync(`tmux bind-key -n M-h select-pane -t ${SESSION_NAME}:0.0`); // Alt+h jumps to sidebar
+  execSync(`tmux bind-key -n M-l select-pane -t ${SESSION_NAME}:0.1`); // Alt+l jumps to terminal
   execSync(`tmux bind-key -n F1 select-pane -t ${SESSION_NAME}:0.0`);
   execSync(`tmux bind-key -n F2 select-pane -t ${SESSION_NAME}:0.1`);
   execSync(`tmux bind-key -n F3 set-option -g mouse`); // Toggle mouse on/off for easy native selection
@@ -237,6 +245,7 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
 
   // 7. Record initial active bookmark ID
   setActiveBookmarkId(initialId);
+  recordActiveSession(initialId);
 
   // 8. Attach session
   runTmux(['attach-session', '-t', SESSION_NAME]);
