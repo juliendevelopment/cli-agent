@@ -98,6 +98,17 @@ chmod +x "${INSTALL_DIR}/bin/cli-agent.js"
 ln -sf "${INSTALL_DIR}/bin/cli-agent.js" "${BIN_DIR}/cli-agent"
 echo -e "${C_GREEN}✓${C_RESET} Executable linked at ${BIN_DIR}/cli-agent"
 
+# Short alias `ca` (never replaces another program)
+ALIAS="${BIN_DIR}/ca"
+if [ -L "${ALIAS}" ] && [[ "$(readlink "${ALIAS}")" == "${INSTALL_DIR}/"* ]]; then
+    ln -sf "${INSTALL_DIR}/bin/cli-agent.js" "${ALIAS}"
+elif [ ! -e "${ALIAS}" ] && [ ! -L "${ALIAS}" ] && ! command -v ca >/dev/null 2>&1; then
+    ln -s "${INSTALL_DIR}/bin/cli-agent.js" "${ALIAS}"
+    echo -e "${C_GREEN}✓${C_RESET} Short alias: ca"
+else
+    echo -e "${C_YELLOW}ℹ️  A 'ca' command already exists: the short alias was not created.${C_RESET}"
+fi
+
 # 6. Ensure BIN_DIR is in PATH
 PATH_UPDATED=0
 if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
@@ -117,7 +128,7 @@ echo -e ""
 echo -e "${C_GREEN}${C_BOLD}✨ Installation completed successfully!${C_RESET}"
 echo -e ""
 echo -e "To launch the workspace, simply run:"
-echo -e "  ${C_BOLD}${C_CYAN}cli-agent${C_RESET}"
+echo -e "  ${C_BOLD}${C_CYAN}cli-agent${C_RESET}   (or ${C_BOLD}${C_CYAN}ca${C_RESET})"
 echo -e ""
 echo -e "Useful commands:"
 echo -e "  ${C_YELLOW}cli-agent add \"My Project\" .${C_RESET}   Add current folder as a bookmark"

@@ -22,6 +22,40 @@ const { VERSION } = require('./version');
 const REPO = 'juliendevelopment/cli-agent';
 const INSTALL_DIR = path.join(os.homedir(), '.cli-agent');
 const BIN_LINK = path.join(os.homedir(), '.local', 'bin', 'cli-agent');
+// Short alias: `ca` launches CLI-Agent too
+const ALIAS_LINK = path.join(os.homedir(), '.local', 'bin', 'ca');
+const INSTALLED_ENTRY = path.join(INSTALL_DIR, 'bin', 'cli-agent.js');
+
+/** True when `link` is a symlink into the install.sh directory (~/.cli-agent). */
+function isOurLink(link) {
+  try {
+    return fs.lstatSync(link).isSymbolicLink() && path.resolve(path.dirname(link), fs.readlinkSync(link)).startsWith(INSTALL_DIR + path.sep);
+  } catch (err) {
+    return false;
+  }
+}
+
+/**
+ * Create the `ca` alias next to the `cli-agent` link for install.sh setups
+ * (also covers updates done by an older version). Never replaces an existing
+ * `ca` that is not ours. Returns 'ok' | 'created' | 'taken' | 'n/a'.
+ */
+function ensureAliasLink() {
+  if (!isOurLink(BIN_LINK) || !fs.existsSync(INSTALLED_ENTRY)) return 'n/a';
+  if (isOurLink(ALIAS_LINK)) return 'ok';
+  try {
+    fs.lstatSync(ALIAS_LINK);
+    return 'taken';
+  } catch (err) {
+    // free
+  }
+  try {
+    fs.symlinkSync(INSTALLED_ENTRY, ALIAS_LINK);
+    return 'created';
+  } catch (err) {
+    return 'n/a';
+  }
+}
 const ENTRYPOINT = path.resolve(__dirname, '..', 'bin', 'cli-agent.js');
 
 function printHelp() {
@@ -36,7 +70,7 @@ function printHelp() {
 ${colors.bold}${colors.brightCyan}🤖 CLI-AGENT${colors.reset} v${VERSION} - AI Agent Terminal Workspace Manager
 
 ${colors.bold}USAGE:${colors.reset}
-  cli-agent                             Open the workspace (sidebar left, terminal right)
+  cli-agent  (or: ca)                   Open the workspace (sidebar left, terminal right)
   cli-agent list                        List saved bookmarks
   cli-agent add <name> [path] [agent]   Add a bookmark (path defaults to current directory)
   cli-agent remove <name|index|path>    Delete a bookmark
@@ -350,6 +384,9 @@ function handleDoctor() {
 
   if (commandExists('cli-agent')) ok('cli-agent is in PATH');
   else warn('cli-agent is not in PATH (add ~/.local/bin to PATH)');
+  const alias = ensureAliasLink();
+  if (alias === 'ok' || alias === 'created') ok('Short alias: ca');
+  else if (alias === 'taken') warn(`${shrinkPath(ALIAS_LINK)} already exists and is not CLI-Agent: the "ca" alias is not available`);
 
   const { INTEGRATIONS } = require('./integrations');
   for (const integ of INTEGRATIONS) {
@@ -390,6 +427,7 @@ function handleUpdate() {
     const binFile = path.join(INSTALL_DIR, 'bin', 'cli-agent.js');
     if (fs.existsSync(binFile)) fs.chmodSync(binFile, 0o755);
 
+    ensureAliasLink();
     const newVersion = JSON.parse(fs.readFileSync(path.join(INSTALL_DIR, 'package.json'), 'utf-8')).version;
     console.log(`\n${colors.bold}${colors.green}✨ CLI-Agent updated: v${VERSION} → v${newVersion}${colors.reset}`);
     console.log(`${colors.gray}Your bookmarks in ${shrinkPath(getConfigDir())} were preserved.${colors.reset}`);
@@ -406,14 +444,7 @@ function handleUninstall(args) {
   const yes = args.includes('--yes') || args.includes('-y');
   const purge = args.includes('--purge');
 
-  const targets = [];
-  try {
-    if (fs.lstatSync(BIN_LINK).isSymbolicLink() && fs.readlinkSync(BIN_LINK).startsWith(INSTALL_DIR)) {
-      targets.push(BIN_LINK);
-    }
-  } catch (err) {
-    // no link
-  }
+  const targets = [BIN_LINK, ALIAS_LINK].filter(isOurLink);
   if (fs.existsSync(path.join(INSTALL_DIR, 'bin', 'cli-agent.js'))) targets.push(INSTALL_DIR);
   if (purge && fs.existsSync(getConfigDir())) targets.push(getConfigDir());
 
@@ -451,6 +482,7 @@ function main() {
   const cmd = args[0];
 
   if (!cmd) {
+    ensureAliasLink();
     const config = loadConfig();
     const defaultBm = config.bookmarks[config.selectedIndex || 0];
     startWorkspace({ initialBookmark: defaultBm, scriptPath: ENTRYPOINT, initialWidth: clampWidth(config.sidebarWidth) });

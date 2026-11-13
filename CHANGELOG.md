@@ -24,6 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 - `cli-agent hooks [--install|--uninstall] [agents]`: Claude Code, Codex, Copilot CLI, Antigravity CLI (agy) and OpenCode report their own status (running / action required / done) through `cli-agent notify --hook`.
+- Short alias `ca` to launch CLI-Agent (created by the installer, `update`, or on first launch; never replaces an existing `ca`).
 - Built-in agents: Antigravity CLI (`g`), Codex (`x`), OpenCode (`n`).
 - `cli-agent notify` accepts a path, `--quiet`, and `--hook` (bookmark found from the tmux pane or the agent's JSON payload).
 - Configurable agents (`agents` in the config) and switcher key (`switcherKey`).

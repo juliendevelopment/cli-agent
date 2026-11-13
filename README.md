@@ -73,7 +73,11 @@ Run `cli-agent doctor` to check your setup.
 Simply run:
 ```bash
 cli-agent
+# or the short alias
+ca
 ```
+
+> `ca` is created next to `cli-agent` in `~/.local/bin` (unless another `ca` command already exists on your machine).
 
 ---
 
