@@ -16,7 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Paths containing `"`, `$` or backquotes no longer break tmux commands (no shell is used anymore).
 
 ### Changed
-- The tmux status line is now at the top and doubles as the tab bar. The terminal window/tab title is "CLI-Agent · <bookmark>" instead of "node". Terminals are tracked by tmux pane (tagged with their bookmark) instead of by hidden window names.
+- The tmux status line is now at the top and doubles as the tab bar. The terminal tab shows "cli-agent" (process name) and the window title "CLI-Agent · <bookmark>" instead of "node". Terminals are tracked by tmux pane (tagged with their bookmark) instead of by hidden window names.
 - CLI-Agent runs on a dedicated tmux server (`tmux -L cli-agent`): its key bindings (Ctrl+E, F1–F3, Alt+arrows), mouse and clipboard settings no longer affect your other tmux sessions. Leftover bindings from older versions are removed from the default server.
 - Status monitoring uses one `tmux list-panes` call per tick and asynchronous `git status`, so the sidebar stays responsive with many projects. The git branch is shown next to each project.
 - Stricter "running" detection (`esc to interrupt`, `Thinking…`) and no screen flicker on redraw.

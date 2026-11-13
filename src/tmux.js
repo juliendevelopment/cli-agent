@@ -556,6 +556,13 @@ function bindKeys({ switcherKey, newTabKey, popupCommand, tabCommand }) {
 }
 
 function attach() {
+  // Terminals that name tabs after the foreground process (Konsole "%d : %n",
+  // GNOME Console…) show "cli-agent" instead of "node".
+  try {
+    process.title = 'cli-agent';
+  } catch (err) {
+    // not supported on this platform
+  }
   // Allow running from inside another tmux (nested client on a separate server).
   const env = { ...process.env };
   delete env.TMUX;
