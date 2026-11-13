@@ -87,7 +87,7 @@ CLI-Agent runs on its own tmux server (`tmux -L cli-agent`), so these shortcuts 
 
 | Shortcut | Action |
 |---|---|
-| **`Ctrl + E`** (or `Alt + E`, configurable with `switcherKey`) | **IntelliJ-Style Quick Switcher Popup**: Shows all sessions with status. The previous session is pre-selected — press `Enter` to instantly toggle between your last 2 sessions! Use `↑`/`↓` to pick any project. |
+| **`Ctrl + E`** (or `Alt + E`, configurable with `switcherKey`) | **IntelliJ-Style Quick Switcher Popup**: Shows all sessions with status. The previous session is pre-selected — press `Enter` to instantly toggle between your last 2 sessions! Use `↑`/`↓` to pick any project. Each project's tabs are listed under it (`●` = the tab it opens on): select a tab to jump straight to it. |
 | **`Alt + ←`** or **`Alt + h`** | **Jump to Sidebar**: Returns keyboard focus from the right terminal back to the left sidebar menu. |
 | **`Alt + →`** or **`Alt + l`** | **Jump to Terminal**: Focuses the active terminal pane. |
 | **`F1` / `F2`** | Toggle focus between left sidebar (`F1`) and right terminal (`F2`). |

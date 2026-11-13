@@ -24,7 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - All UI messages are in English.
 
 ### Added
-- Tabs: several terminals per bookmark (e.g. Claude Code in one, a shell in another). A tab bar at the top shows the active bookmark's tabs with their status; `Ctrl+T` (`newTabKey`) or the `+` button opens a tab in the bookmark's directory, `Alt+1…9`, `Ctrl+PgUp/PgDn` or a click switches tabs, `exit` closes one, `t` in the sidebar opens a tab for the selected bookmark. The sidebar shows the tab count (`⧉2`) and the most urgent status of all tabs.
+- Tabs: several terminals per bookmark (e.g. Claude Code in one, a shell in another). A tab bar at the top shows the active bookmark's tabs with their status; `Ctrl+T` (`newTabKey`) or the `+` button opens a tab in the bookmark's directory, `Alt+1…9`, `Ctrl+PgUp/PgDn` or a click switches tabs, `exit` closes one, `t` in the sidebar opens a tab for the selected bookmark. The Ctrl+E switcher lists each bookmark's tabs under it, with their status, and can jump to a given tab. The sidebar shows the tab count (`⧉2`) and the most urgent status of all tabs.
 - `cli-agent hooks [--install|--uninstall] [agents]`: Claude Code, Codex, Copilot CLI, Antigravity CLI (agy) and OpenCode report their own status (running / action required / done) through `cli-agent notify --hook`.
 - Short alias `ca` to launch CLI-Agent (created by the installer, `update`, or on first launch; never replaces an existing `ca`).
 - Built-in agents: Antigravity CLI (`g`), Codex (`x`), OpenCode (`n`).

@@ -217,14 +217,21 @@ function showPane(paneId, panes) {
   return ok;
 }
 
-function switchToBookmark(targetBookmark, agentCommand = '', focus = true) {
+/**
+ * Show a bookmark: the given tab (pane id) when it belongs to it, otherwise
+ * the tab last shown for it, otherwise a new shell.
+ */
+function switchToBookmark(targetBookmark, agentCommand = '', focus = true, tabPaneId = null) {
   if (!targetBookmark) return;
   const targetId = getBookmarkKey(targetBookmark);
   const currentId = getActiveBookmarkId();
   const panes = listSessionPanes() || [];
   const visible = panes.find(p => p.visible);
+  const wantedTab = tabPaneId && panes.find(p => p.paneId === tabPaneId && p.bookmark === targetId);
 
-  if (!visible || visible.bookmark !== targetId) {
+  if (wantedTab) {
+    showPane(wantedTab.paneId, panes);
+  } else if (!visible || visible.bookmark !== targetId) {
     // Bring back the tab that was last shown for this bookmark (or create one)
     const tabs = tabsOf(panes, targetId);
     const remembered = rememberedTab(targetId);
@@ -515,16 +522,28 @@ function cleanupLegacyBindings() {
   }
 }
 
+/** Quote one argument for a tmux command string (if-shell branches). */
+function tmuxQuoteArg(value) {
+  return `"${String(value).replace(/[\\"$]/g, '\\$&')}"`;
+}
+
 function bindKeys({ switcherKey, newTabKey, popupCommand, tabCommand }) {
   const bind = (...args) => tmuxQuiet(['bind-key', ...args]);
   const tab = action => ['run-shell', '-b', `${tabCommand} ${action}`];
 
-  // Quick switcher popup (tmux >= 3.3 for styled borders, fallback for 3.2)
+  // Quick switcher popup: 64x24 (bookmarks + their tabs), or most of the
+  // screen on a small terminal. Styled borders need tmux >= 3.3.
+  const version = getTmuxVersion();
+  const styled = !version || version.major > 3 || (version.major === 3 && version.minor >= 3);
+  const popup = (w, h) => [
+    'display-popup', '-w', w, '-h', h,
+    ...(styled ? ['-b', 'rounded', '-s', 'bg=#1e1e2e,fg=#cdd6f4', '-S', 'fg=#89b4fa', '-T', ' Recent Sessions '] : []),
+    '-E', popupCommand
+  ].map(tmuxQuoteArg).join(' ');
   const keys = [...new Set([switcherKey, 'M-e'])];
   for (const key of keys) {
-    const ok = bind('-n', key, 'display-popup', '-w', '56', '-h', '15', '-b', 'rounded',
-      '-s', 'bg=#1e1e2e,fg=#cdd6f4', '-S', 'fg=#89b4fa', '-T', ' Recent Sessions ', '-E', popupCommand);
-    if (ok === null) bind('-n', key, 'display-popup', '-w', '56', '-h', '15', '-E', popupCommand);
+    bind('-n', key, 'if-shell', '-F', '#{&&:#{e|>=:#{client_height},28},#{e|>=:#{client_width},68}}',
+      popup('64', '24'), popup('95%', '90%'));
   }
 
   bind('-n', 'M-Left', 'select-pane', '-t', SIDEBAR_PANE);
@@ -674,6 +693,7 @@ module.exports = {
   setActiveBookmarkId,
   listSessionPanes,
   tabsOf,
+  rememberedTab,
   setPaneStatus,
   switchToBookmark,
   newTab,
