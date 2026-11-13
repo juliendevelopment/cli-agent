@@ -628,6 +628,11 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
   // Title of the host terminal window / tab (instead of "node")
   opt('-g', 'set-titles', 'on');
   opt('-g', 'set-titles-string', 'CLI-Agent#{@ca_title}');
+  // Konsole names its tabs "%d : %n" and ignores the window title: send the
+  // title with Konsole's own "tab title" sequence (OSC 30) instead.
+  if (process.env.KONSOLE_VERSION || process.env.KONSOLE_DBUS_SESSION) {
+    opt('-as', 'terminal-overrides', ',*:tsl=\\E]30;:fsl=^G');
+  }
   opt('-t', SESSION_NAME, 'status-position', 'top');
   opt('-t', SESSION_NAME, 'status-style', 'bg=#1e1e2e,fg=#cdd6f4');
   opt('-t', SESSION_NAME, 'status-right-length', '90');
