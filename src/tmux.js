@@ -426,6 +426,8 @@ function refreshTabBar(panes = null) {
   if (value === lastTabBar) return;
   lastTabBar = value;
   tmuxQuiet(['set-option', '-t', SESSION_NAME, TAB_BAR_OPT, value]);
+  // Window title of the host terminal: "CLI-Agent · <bookmark>"
+  tmuxQuiet(['set-option', '-t', SESSION_NAME, '@ca_title', bm ? ` · ${tmuxText(bm.name)}` : '']);
 }
 
 /** Entry point of `cli-agent --tab <action>` (run by tmux key / mouse bindings). */
@@ -616,6 +618,9 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
   opt('-s', 'set-clipboard', 'on');
   opt('-s', 'escape-time', '10');
   opt('-t', SESSION_NAME, 'status', 'on');
+  // Title of the host terminal window / tab (instead of "node")
+  opt('-g', 'set-titles', 'on');
+  opt('-g', 'set-titles-string', 'CLI-Agent#{@ca_title}');
   opt('-t', SESSION_NAME, 'status-position', 'top');
   opt('-t', SESSION_NAME, 'status-style', 'bg=#1e1e2e,fg=#cdd6f4');
   opt('-t', SESSION_NAME, 'status-right-length', '90');
