@@ -2,7 +2,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { stripAnsi, colors } = require('./ui');
-const { tmuxQuiet, SESSION_NAME } = require('./exec');
+const { tmuxQuiet } = require('./exec');
 const { getConfigDir, writeJsonAtomic } = require('./config');
 
 // Manual statuses (from `cli-agent notify` / hooks) expire after this delay.
@@ -100,40 +100,58 @@ function resolveStatus(manualEntry, detected, procInfo) {
 
 /**
  * One tmux call listing every pane of the session. Returns a map
- * bookmarkKey -> { paneId, pid, command } where the visible right pane
- * (window 0, pane 1) is attributed to activeId.
+ * bookmarkKey -> [{ paneId, pid, command, visible, status }] (one entry per
+ * tab) and the flat list of panes.
  */
-function getSessionPanes(activeId) {
-  const out = tmuxQuiet([
-    'list-panes', '-s', '-t', SESSION_NAME,
-    '-F', '#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}'
-  ]);
+function getSessionPanes() {
+  const { listSessionPanes } = require('./tmux');
+  const all = listSessionPanes();
   const panes = new Map();
-  let visiblePaneCount = 0;
-  if (out === null) return { panes, visiblePaneCount: -1 };
-
-  for (const line of out.split('\n')) {
-    if (!line.trim()) continue;
-    const [winIndex, winName, paneIndex, paneId, pid, command] = line.split('\t');
-    const info = { paneId, pid: parseInt(pid, 10), command: command || '' };
-    if (winIndex === '0') {
-      visiblePaneCount++;
-      if (paneIndex === '1' && activeId) panes.set(activeId, info);
-    } else if (winName && winName.startsWith('_pane_') && paneIndex === '0') {
-      panes.set(winName.slice('_pane_'.length), info);
-    }
+  for (const pane of all || []) {
+    if (!pane.bookmark) continue;
+    if (!panes.has(pane.bookmark)) panes.set(pane.bookmark, []);
+    panes.get(pane.bookmark).push(pane);
   }
-  return { panes, visiblePaneCount };
+  return { panes, all: all || [] };
 }
 
 /** Bookmark key of the session that owns a tmux pane id (e.g. "%3"), or null. */
 function bookmarkKeyForPane(paneId) {
-  const activeId = (tmuxQuiet(['show-options', '-t', SESSION_NAME, '-qv', '@active_bookmark_id']) || '').trim() || null;
-  const { panes } = getSessionPanes(activeId);
-  for (const [key, info] of panes) {
-    if (info.paneId === paneId) return key;
+  const { all } = getSessionPanes();
+  const pane = all.find(p => p.paneId === paneId);
+  return pane && pane.bookmark ? pane.bookmark : null;
+}
+
+// Most important first: what a bookmark with several tabs shows.
+const STATUS_PRIORITY = ['input_required', 'error', 'rate_limit', 'running', 'done', 'idle'];
+
+/** The most important of several statuses. */
+function mostImportantStatus(statuses) {
+  let best = STATUS_TYPES.IDLE;
+  for (const s of statuses) {
+    if (s && STATUS_PRIORITY.indexOf(s.id) < STATUS_PRIORITY.indexOf(best.id)) best = s;
   }
-  return null;
+  return best;
+}
+
+/**
+ * Status of a bookmark from all its tabs, plus the status of each tab.
+ * A manual (hook) status applies to the tabs running an agent.
+ */
+function computeBookmarkStatus(tabs, manualEntry, agentNames, lineCount = 25) {
+  const tabStatuses = new Map();
+  const detected = [];
+  let anyAgent = false;
+  for (const tab of tabs || []) {
+    const proc = procInfoFromPane(tab, agentNames);
+    const status = detectTerminalStatus(capturePane(tab.paneId, lineCount), proc);
+    detected.push(status);
+    anyAgent = anyAgent || proc.isAgent;
+    tabStatuses.set(tab.paneId, proc.isAgent ? resolveStatus(manualEntry, status, proc) : status);
+  }
+  const proc = tabs && tabs.length ? { isAgent: anyAgent } : null;
+  const status = resolveStatus(manualEntry, mostImportantStatus(detected), proc);
+  return { status, tabStatuses };
 }
 
 function capturePane(paneId, lineCount = 30) {
@@ -258,6 +276,8 @@ module.exports = {
   resolveStatus,
   getSessionPanes,
   bookmarkKeyForPane,
+  mostImportantStatus,
+  computeBookmarkStatus,
   capturePane,
   procInfoFromPane,
   parseGitStatus,

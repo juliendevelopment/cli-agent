@@ -19,7 +19,11 @@ const {
   getActiveBookmarkId,
   setActiveBookmarkId,
   getMainWindowPaneCount,
-  respawnTerminalPane,
+  ensureTerminalPane,
+  newTab,
+  refreshTabBar,
+  setPaneStatus,
+  newTabKeyOf,
   resizeSidebar,
   setSidebarWidth,
   getPaneWidths,
@@ -34,12 +38,9 @@ const {
   loadManualStatuses,
   clearManualStatus,
   getManualStatus,
-  resolveStatus,
   getSessionPanes,
-  capturePane,
-  procInfoFromPane,
-  getGitInfoAsync,
-  detectTerminalStatus
+  computeBookmarkStatus,
+  getGitInfoAsync
 } = require('./monitor');
 const { colors, truncate, drawLine, paint, hideCursor, showCursor, visibleLength } = require('./ui');
 const { VERSION } = require('./version');
@@ -70,6 +71,9 @@ class SidebarApp {
     this.hasActiveAlert = false;
     this.lastActiveId = null;
     this.rowMap = {};
+    this.tabCounts = {};
+    this.paneStatusCache = {};
+    this.missingTerminalTicks = 0;
 
     this.widthPresets = [24, 30, 38];
     this.widthPresetIndex = 0;
@@ -180,16 +184,15 @@ class SidebarApp {
   runMonitorCheck(forceRender = false) {
     let changed = false;
 
-    // The right terminal was closed (user typed `exit`): recreate it instead of
-    // killing every background session. Only after the initial split happened.
+    // The visible tab was closed (user typed `exit`): the pane-exited hook shows
+    // the next tab. Fallback if it did not run: same thing, one tick later.
     const paneCount = getMainWindowPaneCount();
     if (paneCount >= 2) {
       this.seenTerminalPane = true;
-    } else if (paneCount === 1 && this.seenTerminalPane) {
-      const activeBm = this.findBookmarkByKey(getActiveBookmarkId());
-      const dir = activeBm && fs.existsSync(activeBm.path) ? activeBm.path : process.cwd();
-      respawnTerminalPane(dir, this.getRealSidebarWidth() || this.config.sidebarWidth);
-      this.setStatus('Terminal restarted.');
+      this.missingTerminalTicks = 0;
+    } else if (paneCount === 1 && this.seenTerminalPane && ++this.missingTerminalTicks >= 2) {
+      this.missingTerminalTicks = 0;
+      if (ensureTerminalPane()) this.setStatus('Terminal restarted.');
     }
 
     const activeId = getActiveBookmarkId() || (this.getCurrentBookmark() ? getBookmarkKey(this.getCurrentBookmark()) : null);
@@ -203,26 +206,28 @@ class SidebarApp {
       changed = true;
     }
 
-    // 1. Statuses: one tmux call for all panes, one capture per open session
+    // 1. Statuses: one tmux call for all panes, one capture per tab
     const manual = loadManualStatuses();
-    const { panes } = getSessionPanes(activeId);
+    const { panes, all } = getSessionPanes();
     for (const bm of this.config.bookmarks) {
       const key = getBookmarkKey(bm);
-      const pane = panes.get(key);
-      let detected = STATUS_TYPES.IDLE;
-      let proc = null;
-      if (pane) {
-        proc = procInfoFromPane(pane, this.agentNames);
-        detected = detectTerminalStatus(capturePane(pane.paneId, 25), proc);
-      }
+      const tabs = panes.get(key) || [];
       const manualEntry = getManualStatus(manual, key) || getManualStatus(manual, bm.name);
-      const status = resolveStatus(manualEntry, detected, proc);
+      const { status, tabStatuses } = computeBookmarkStatus(tabs, manualEntry, this.agentNames);
+      for (const tab of tabs) this.updatePaneStatus(tab, tabStatuses.get(tab.paneId));
+      if (this.tabCounts[key] !== tabs.length) {
+        this.tabCounts[key] = tabs.length;
+        changed = true;
+      }
       const prev = this.bookmarkStatuses[key];
       if (!prev || prev.id !== status.id) {
         this.bookmarkStatuses[key] = status;
         changed = true;
       }
     }
+
+    // Tab bar: names follow the running command, icons follow the status
+    refreshTabBar(all);
 
     // 2. Git info, asynchronously (never blocks key handling)
     const now = Date.now();
@@ -238,11 +243,21 @@ class SidebarApp {
     });
     if (anyInputRequired !== this.hasActiveAlert) {
       this.hasActiveAlert = anyInputRequired;
-      setStatusRight(statusRight(this.config.switcherKey || 'C-e', anyInputRequired));
+      setStatusRight(statusRight(this.config.switcherKey || 'C-e', anyInputRequired, newTabKeyOf(this.config)));
       changed = true;
     }
 
     if (changed || forceRender) this.render();
+  }
+
+  /** Store a tab's status on its tmux pane (read by the tab bar). */
+  updatePaneStatus(tab, status) {
+    const id = status && status.id !== STATUS_TYPES.IDLE.id ? status.id : '';
+    if (this.paneStatusCache[tab.paneId] !== id) {
+      this.paneStatusCache[tab.paneId] = id;
+      setPaneStatus(tab.paneId, id);
+    }
+    tab.status = id;
   }
 
   refreshGitInfo() {
@@ -290,6 +305,7 @@ class SidebarApp {
   handleResize() {
     const realWidth = this.getRealSidebarWidth();
     if (realWidth) this.persistSidebarWidth(realWidth);
+    refreshTabBar();
     this.render();
   }
 
@@ -393,6 +409,8 @@ class SidebarApp {
         return undefined;
       case 'a':
         return this.startAddBookmark();
+      case 't':
+        return this.openNewTab();
       case 'd':
         if (this.config.bookmarks.length > 0) {
           this.mode = 'delete_confirm';
@@ -470,6 +488,23 @@ class SidebarApp {
     switchToBookmark(current, cmd, true);
     this.lastActiveId = getBookmarkKey(current);
     this.setStatus(`Switched to "${current.name}"`);
+  }
+
+  /** New tab (shell) for the selected bookmark, shown on the right. */
+  openNewTab() {
+    const current = this.getCurrentBookmark();
+    if (!current) {
+      this.setStatus('⚠️ No bookmark selected.');
+      return;
+    }
+    if (!fs.existsSync(current.path)) {
+      this.setStatus(`⚠️ Directory not found: ${shrinkPath(current.path)}`);
+      return;
+    }
+    newTab(current);
+    this.lastActiveId = getBookmarkKey(current);
+    this.runMonitorCheck(true);
+    this.setStatus(`New tab in "${current.name}"`);
   }
 
   startAddBookmark() {
@@ -669,7 +704,7 @@ class SidebarApp {
     for (const agent of this.agents) {
       if (agent.shortcut) items.push([agent.shortcut, agent.name.split(' ')[0]]);
     }
-    items.push(['a', 'Add'], ['e', 'Edit'], ['d', 'Delete'], ['o', 'Agents'], ['< >', 'Size'], ['Tab', 'Term'], ['q', 'Quit']);
+    items.push(['t', 'New tab'], ['a', 'Add'], ['e', 'Edit'], ['d', 'Delete'], ['o', 'Agents'], ['< >', 'Size'], ['Tab', 'Term'], ['q', 'Quit']);
 
     const lines = [];
     let current = '';
@@ -771,14 +806,16 @@ class SidebarApp {
 
         let gitTag = '';
         if (git) {
-          const room = width - 3 - visibleLength(statusBadge(status)) - 1;
+          const room = width - 3 - visibleLength(statusBadge(status)) - 1 - (this.tabCounts[key] > 1 ? 3 : 0);
           const branch = git.branch ? truncate(git.branch, Math.max(0, room - 2)) : '';
           gitTag = room > 4 && branch
             ? ` ${colors.gray}${branch}${colors.reset}${git.isDirty ? `${colors.brightYellow}*${colors.reset}` : ''}`
             : (git.isDirty ? ` ${colors.brightYellow}*${colors.reset}` : '');
         }
+        const tabCount = this.tabCounts[key] || 0;
+        const tabTag = tabCount > 1 ? ` ${colors.brightCyan}⧉${tabCount}${colors.reset}` : '';
         this.rowMap[lines.length + 1] = i;
-        lines.push(`   ${statusBadge(status)}${gitTag}`);
+        lines.push(`   ${statusBadge(status)}${tabTag}${gitTag}`);
       }
 
       if (endIdx < count || startIdx > 0) {

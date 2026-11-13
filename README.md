@@ -96,6 +96,28 @@ CLI-Agent runs on its own tmux server (`tmux -L cli-agent`), so these shortcuts 
 
 ---
 
+### Tabs: Several Terminals per Bookmark
+
+The bar at the top shows the active bookmark's tabs, right above the terminal: run Claude Code in one tab and keep a plain shell in another, both in the project directory.
+
+```
+ 📁 Backend API            │  1 claude   2 bash   +
+```
+
+| Shortcut | Action |
+|---|---|
+| **`Ctrl + T`** (configurable with `newTabKey`) or click **`+`** | New tab: a shell in the bookmark's directory |
+| **`Alt + 1`…`9`** or click a tab | Go to tab 1…9 |
+| **`Ctrl + PgUp` / `Ctrl + PgDn`** | Previous / next tab |
+| `exit` | Closes the tab (the next one is shown; the last tab is replaced by a fresh shell) |
+| `t` (in the sidebar) | New tab for the selected bookmark |
+
+Each tab is named after the command running in it and shows its status (`🔔`, `⚡`, `✓`…). A tab waiting for input is highlighted in yellow. In the sidebar, `⧉2` means the bookmark has 2 tabs, and its badge shows the most urgent status of all its tabs. Switching bookmarks brings back the tab you were last using.
+
+> `Ctrl+T` is taken by CLI-Agent everywhere in the workspace (Claude Code uses it to show the task list, bash to swap two characters). Set `"newTabKey"` to another key, or to `""` to keep only the `+` button and `Alt+1…9`.
+
+---
+
 ### Sidebar Shortcuts (When Sidebar is Focused)
 
 | Shortcut | Action |
@@ -107,6 +129,7 @@ CLI-Agent runs on its own tmux server (`tmux -L cli-agent`), so these shortcuts 
 | `g` / `x` / `n` | Switch to project & launch **Antigravity CLI** (`agy`) / **Codex** / **OpenCode** |
 | `s` | Same as `Enter` |
 | `Space` / `o` | Open interactive agent selector modal |
+| `t` | Open a new tab for the selected project |
 | `a` | Add a new bookmark (interactive dialog) |
 | `e` | Edit selected bookmark (Name / Path) |
 | `d` | Delete selected bookmark & terminate its session |
@@ -116,7 +139,7 @@ CLI-Agent runs on its own tmux server (`tmux -L cli-agent`), so these shortcuts 
 | `Tab` | Switch focus directly to the terminal pane |
 | `q` | Quit CLI-Agent (closes all sessions, asks for confirmation) |
 
-> Typing `exit` in the right terminal only restarts a fresh shell for the current project; your other sessions keep running.
+> Typing `exit` in the right terminal closes that tab; if it was the project's last tab, a fresh shell is started. Your other sessions keep running.
 
 > 💡 **Mouse Support & Text Selection**:
 > - **Hold `Shift` + Drag to Select**: Holding `Shift` while dragging your mouse lets your host terminal emulator select text natively, bypassing tmux mouse capture. Then press `Ctrl + Shift + C` (or Cmd+C on macOS) or right-click to copy.
@@ -131,7 +154,7 @@ CLI-Agent monitors active processes and terminal outputs in real time, displayin
 
 | Badge | Color | Description / Trigger |
 |---|---|---|
-| `🔔 ACTION REQUIRED` | 🟡 **Bright Yellow** (highlight) | Triggered when an agent asks a question or requires confirmation (`? Allow tool`, `(y/n)`, `[y/N]`, `Waiting for input`). An alert also appears in the bottom status bar! |
+| `🔔 ACTION REQUIRED` | 🟡 **Bright Yellow** (highlight) | Triggered when an agent asks a question or requires confirmation (`? Allow tool`, `(y/n)`, `[y/N]`, `Waiting for input`). An alert also appears in the top bar! |
 | `⚡ RUNNING...` | 🔵 **Bright Cyan** | The agent is working (`esc to interrupt`, `Thinking…`). |
 | `✓ Done` | 🟢 **Green** | The agent has completed its task successfully (`Task complete`, `Done in...`, prompt returned). |
 | `✗ ERROR` | 🔴 **Bright Red** | Command error detected (`fatal:`, `Command failed`, `npm ERR!`, uncaught exception). |
@@ -241,6 +264,7 @@ Example:
   "selectedIndex": 0,
   "sidebarWidth": 26,
   "switcherKey": "C-e",
+  "newTabKey": "C-t",
   "agents": [
     { "id": "gemini", "name": "Gemini CLI", "command": "gemini", "shortcut": "g" },
     { "id": "claude", "command": "claude --continue" }
@@ -265,7 +289,8 @@ Example:
 ```
 
 - `switcherKey`: tmux key name for the quick switcher (`C-e`, `M-s`, `F5`…). Restart with `cli-agent kill && cli-agent` to apply.
-- `agents`: extra agents, or overrides of the built-in ones (`claude`, `copilot`, `agy`, `codex`, `opencode`, `shell`) by `id`. A `shortcut` is a single key; keys used by the sidebar (`a d e j k o q r s w`…) are ignored.
+- `newTabKey`: tmux key name that opens a new tab (default `C-t`; `""` disables it). Restart to apply.
+- `agents`: extra agents, or overrides of the built-in ones (`claude`, `copilot`, `agy`, `codex`, `opencode`, `shell`) by `id`. A `shortcut` is a single key; keys used by the sidebar (`a d e j k o q r s t w`…) are ignored.
 
 ---
 

@@ -13,7 +13,7 @@ const {
   shrinkPath,
   clampWidth
 } = require('./config');
-const { startWorkspace, killSession, getTmuxVersion, keyLabel } = require('./tmux');
+const { startWorkspace, killSession, getTmuxVersion, keyLabel, newTabKeyOf } = require('./tmux');
 const { getAgentsWithStatus } = require('./agents');
 const { commandExists, shQuote } = require('./exec');
 const { colors } = require('./ui');
@@ -61,6 +61,8 @@ const ENTRYPOINT = path.resolve(__dirname, '..', 'bin', 'cli-agent.js');
 function printHelp() {
   const config = loadConfig();
   const switcher = keyLabel(config.switcherKey || 'C-e');
+  const newTabKey = newTabKeyOf(config);
+  const newTabLabel = newTabKey ? keyLabel(newTabKey) : '(disabled)';
   const agentKeys = getAgentsWithStatus(config)
     .filter(a => a.shortcut)
     .map(a => `  ${a.shortcut.padEnd(15)}Launch ${a.name} in the directory`)
@@ -95,11 +97,18 @@ ${colors.bold}GLOBAL SHORTCUTS (INSIDE CLI-AGENT):${colors.reset}
   F3             Toggle mouse capture (for native text selection)
   Shift + Drag   Select text natively and copy with Ctrl+Shift+C
 
+${colors.bold}TABS (SEVERAL TERMINALS PER BOOKMARK, TOP BAR):${colors.reset}
+  ${newTabLabel.padEnd(14)} New tab in the active bookmark's directory (or click "+")
+  Alt + 1..9     Go to tab 1..9 (or click a tab)
+  Ctrl+PgUp/PgDn Previous / next tab
+  exit           Typing exit in a tab closes it
+
 ${colors.bold}IN THE SIDEBAR:${colors.reset}
   ↑ / ↓          Navigate bookmarks (mouse wheel works too)
   Enter / s      Open the selected directory in the right terminal
 ${agentKeys}
   o / Space      Choose an agent from a list
+  t              New tab for the selected bookmark
   a / e / d      Add / edit / delete a bookmark
   < / >          Shrink / expand the sidebar (w: cycle 24/30/38 cols)
   r              Reset the live status
@@ -493,6 +502,9 @@ function main() {
   switch (cmd) {
     case '--sidebar':
       require('./sidebar').runSidebar();
+      break;
+    case '--tab':
+      require('./tmux').handleTabCommand(rest);
       break;
     case '--switcher':
     case 'switcher':

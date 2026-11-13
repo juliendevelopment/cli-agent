@@ -6,11 +6,8 @@ const {
   statusBadge,
   loadManualStatuses,
   getManualStatus,
-  resolveStatus,
   getSessionPanes,
-  capturePane,
-  procInfoFromPane,
-  detectTerminalStatus
+  computeBookmarkStatus
 } = require('./monitor');
 const { colors, truncate, drawLine, paint, hideCursor, showCursor } = require('./ui');
 
@@ -53,18 +50,11 @@ class SwitcherApp {
     const statuses = {};
     const manual = loadManualStatuses();
     const agentNames = getAgentProcessNames(this.config);
-    const { panes } = getSessionPanes(this.activeId);
+    const { panes } = getSessionPanes();
     for (const bm of this.items.slice(0, MAX_ITEMS)) {
       const key = getBookmarkKey(bm);
-      const pane = panes.get(key);
-      let detected = STATUS_TYPES.IDLE;
-      let proc = null;
-      if (pane) {
-        proc = procInfoFromPane(pane, agentNames);
-        detected = detectTerminalStatus(capturePane(pane.paneId, 15), proc);
-      }
       const entry = getManualStatus(manual, key) || getManualStatus(manual, bm.name);
-      statuses[key] = resolveStatus(entry, detected, proc);
+      statuses[key] = computeBookmarkStatus(panes.get(key), entry, agentNames, 15).status;
     }
     return statuses;
   }

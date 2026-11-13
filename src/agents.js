@@ -47,7 +47,7 @@ const DEFAULT_AGENTS = [
 
 // Keys used by the sidebar itself; agents cannot steal them.
 const RESERVED_KEYS = new Set([
-  'a', 'd', 'e', 'j', 'k', 'o', 'q', 'r', 's', 'w',
+  'a', 'd', 'e', 'j', 'k', 'o', 'q', 'r', 's', 't', 'w',
   ' ', '<', '>', '[', ']', '-', '+', '\t', '\r', '\n'
 ]);
 

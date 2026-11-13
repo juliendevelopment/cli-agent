@@ -16,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Paths containing `"`, `$` or backquotes no longer break tmux commands (no shell is used anymore).
 
 ### Changed
+- The tmux status line is now at the top and doubles as the tab bar. Terminals are tracked by tmux pane (tagged with their bookmark) instead of by hidden window names.
 - CLI-Agent runs on a dedicated tmux server (`tmux -L cli-agent`): its key bindings (Ctrl+E, F1–F3, Alt+arrows), mouse and clipboard settings no longer affect your other tmux sessions. Leftover bindings from older versions are removed from the default server.
 - Status monitoring uses one `tmux list-panes` call per tick and asynchronous `git status`, so the sidebar stays responsive with many projects. The git branch is shown next to each project.
 - Stricter "running" detection (`esc to interrupt`, `Thinking…`) and no screen flicker on redraw.
@@ -23,6 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - All UI messages are in English.
 
 ### Added
+- Tabs: several terminals per bookmark (e.g. Claude Code in one, a shell in another). A tab bar at the top shows the active bookmark's tabs with their status; `Ctrl+T` (`newTabKey`) or the `+` button opens a tab in the bookmark's directory, `Alt+1…9`, `Ctrl+PgUp/PgDn` or a click switches tabs, `exit` closes one, `t` in the sidebar opens a tab for the selected bookmark. The sidebar shows the tab count (`⧉2`) and the most urgent status of all tabs.
 - `cli-agent hooks [--install|--uninstall] [agents]`: Claude Code, Codex, Copilot CLI, Antigravity CLI (agy) and OpenCode report their own status (running / action required / done) through `cli-agent notify --hook`.
 - Short alias `ca` to launch CLI-Agent (created by the installer, `update`, or on first launch; never replaces an existing `ca`).
 - Built-in agents: Antigravity CLI (`g`), Codex (`x`), OpenCode (`n`).
