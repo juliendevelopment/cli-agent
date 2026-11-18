@@ -46,10 +46,12 @@ function padRight(str, len) {
 }
 
 function truncate(str, maxLen) {
+  if (maxLen <= 0) return '';
   const plain = stripAnsi(str);
-  if (plain.length <= maxLen) return str;
-  if (maxLen <= 3) return plain.slice(0, maxLen);
-  return plain.slice(0, maxLen - 3) + '...';
+  const chars = Array.from(plain);
+  if (chars.length <= maxLen) return str;
+  if (maxLen <= 3) return chars.slice(0, maxLen).join('');
+  return chars.slice(0, maxLen - 3).join('') + '...';
 }
 
 function drawLine(width, char = '─') {

@@ -50,21 +50,64 @@ function loadManualStatuses() {
   }
 }
 
-function saveManualStatus(bookmarkKey, statusKey, message = '') {
+function saveManualStatus(bookmarkKey, statusKey, message = '', paneId = '') {
   const current = loadManualStatuses();
+  const updatedAt = new Date().toISOString();
+  const prev = current[bookmarkKey];
+  const panes = prev && prev.panes && typeof prev.panes === 'object' ? { ...prev.panes } : {};
+  if (paneId) {
+    panes[paneId] = { status: statusKey, message, updatedAt };
+  }
   current[bookmarkKey] = {
     status: statusKey,
     message,
-    updatedAt: new Date().toISOString()
+    updatedAt,
+    ...(paneId ? { paneId } : {}),
+    ...(Object.keys(panes).length ? { panes } : {})
   };
   writeJsonAtomic(getStatusFile(), current);
 }
 
-function clearManualStatus(bookmarkKey) {
+function clearManualStatus(bookmarkKey, paneId = '') {
   const current = loadManualStatuses();
   if (!(bookmarkKey in current)) return;
+  if (paneId && current[bookmarkKey] && current[bookmarkKey].panes) {
+    delete current[bookmarkKey].panes[paneId];
+    const remaining = Object.entries(current[bookmarkKey].panes);
+    if (remaining.length > 0) {
+      const [lastPane, lastEntry] = remaining[remaining.length - 1];
+      current[bookmarkKey] = {
+        ...lastEntry,
+        paneId: lastPane,
+        panes: current[bookmarkKey].panes
+      };
+      writeJsonAtomic(getStatusFile(), current);
+      return;
+    }
+  }
   delete current[bookmarkKey];
   writeJsonAtomic(getStatusFile(), current);
+}
+
+/**
+ * Drop transient statuses (running / input_required) and per-pane entries
+ * when a CLI-Agent tmux session closes or restarts.
+ */
+function clearTransientStatuses() {
+  const current = loadManualStatuses();
+  let changed = false;
+  for (const [key, entry] of Object.entries(current)) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (entry.status === 'running' || entry.status === 'input_required') {
+      delete current[key];
+      changed = true;
+    } else if (entry.panes || entry.paneId) {
+      delete entry.panes;
+      delete entry.paneId;
+      changed = true;
+    }
+  }
+  if (changed) writeJsonAtomic(getStatusFile(), current);
 }
 
 /** Return the manual status entry for a bookmark if it is still fresh. */
@@ -136,18 +179,35 @@ function mostImportantStatus(statuses) {
 
 /**
  * Status of a bookmark from all its tabs, plus the status of each tab.
- * A manual (hook) status applies to the tabs running an agent.
+ * A hook status recorded with a paneId applies only to that tab; a bookmark-wide
+ * manual status applies to tabs running an agent.
  */
 function computeBookmarkStatus(tabs, manualEntry, agentNames, lineCount = 25) {
   const tabStatuses = new Map();
   const detected = [];
   let anyAgent = false;
+  const hasPaneMap = Boolean(manualEntry && manualEntry.panes && typeof manualEntry.panes === 'object');
+  const isPaneScoped = Boolean(manualEntry && (manualEntry.paneId || hasPaneMap));
+
   for (const tab of tabs || []) {
     const proc = procInfoFromPane(tab, agentNames);
     const status = detectTerminalStatus(capturePane(tab.paneId, lineCount), proc);
     detected.push(status);
     anyAgent = anyAgent || proc.isAgent;
-    tabStatuses.set(tab.paneId, proc.isAgent ? resolveStatus(manualEntry, status, proc) : status);
+    const paneEntry = hasPaneMap
+      ? getManualStatus(manualEntry.panes, tab.paneId)
+      : (manualEntry && manualEntry.paneId === tab.paneId ? manualEntry : null);
+    if (paneEntry) {
+      tabStatuses.set(tab.paneId, resolveStatus(paneEntry, status, proc));
+    } else if (!isPaneScoped && proc.isAgent) {
+      tabStatuses.set(tab.paneId, resolveStatus(manualEntry, status, proc));
+    } else {
+      tabStatuses.set(tab.paneId, status);
+    }
+  }
+
+  if (tabs && tabs.length && isPaneScoped) {
+    return { status: mostImportantStatus([...tabStatuses.values()]), tabStatuses };
   }
   const proc = tabs && tabs.length ? { isAgent: anyAgent } : null;
   const status = resolveStatus(manualEntry, mostImportantStatus(detected), proc);
@@ -190,9 +250,20 @@ function parseGitStatus(output) {
   };
 }
 
+function hasGitDir(dirPath) {
+  if (!dirPath) return false;
+  let cur = path.resolve(dirPath);
+  while (true) {
+    if (fs.existsSync(path.join(cur, '.git'))) return true;
+    const parent = path.dirname(cur);
+    if (parent === cur) return false;
+    cur = parent;
+  }
+}
+
 /** Asynchronous git status; calls back with null if not a repo. */
 function getGitInfoAsync(dirPath, callback) {
-  if (!dirPath || !fs.existsSync(path.join(dirPath, '.git'))) {
+  if (!hasGitDir(dirPath)) {
     callback(null);
     return;
   }
@@ -272,6 +343,7 @@ module.exports = {
   loadManualStatuses,
   saveManualStatus,
   clearManualStatus,
+  clearTransientStatuses,
   getManualStatus,
   resolveStatus,
   getSessionPanes,

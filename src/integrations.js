@@ -304,9 +304,12 @@ export default Plugin.define({
           const dir = event.location?.directory
           if (sessionID && dir) state.dirs.set(sessionID, dir)
           const status = STATUS[event.type]
-          if (!status || state.seen.has(event.id)) continue
-          state.seen.add(event.id)
-          if (state.seen.size > 1000) state.seen.clear()
+          if (!status) continue
+          if (event.id) {
+            if (state.seen.has(event.id)) continue
+            state.seen.add(event.id)
+            if (state.seen.size > 1000) state.seen.clear()
+          }
           const target = dir ?? state.dirs.get(sessionID)
           if (target) notify(target, status)
         }

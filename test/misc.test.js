@@ -6,7 +6,7 @@ const { shQuote, commandExists } = require('../src/exec');
 const { getAgents, RESERVED_KEYS } = require('../src/agents');
 const { keyLabel } = require('../src/tmux');
 const { STATUS_ALIASES } = require('../src/index');
-const { stripAnsi } = require('../src/ui');
+const { stripAnsi, truncate } = require('../src/ui');
 
 test('shQuote survives quotes, $ and backticks', () => {
   for (const value of ["it's", 'a "b" $HOME `id`', '']) {
@@ -53,4 +53,11 @@ test('every notify alias maps to a known status', () => {
 
 test('stripAnsi removes color codes', () => {
   assert.equal(stripAnsi('\x1b[1;32mok\x1b[0m'), 'ok');
+});
+
+test('truncate handles non-positive maxLen and surrogate pairs safely', () => {
+  assert.equal(truncate('hello', 0), '');
+  assert.equal(truncate('hello', -2), '');
+  assert.equal(truncate('🚀🔥✨🎉', 4), '🚀🔥✨🎉');
+  assert.equal(truncate('🚀🔥✨🎉🥳', 4), '🚀...');
 });

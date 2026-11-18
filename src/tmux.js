@@ -5,6 +5,8 @@ const path = require('path');
 const { SOCKET, SESSION_NAME, tmux, tmuxQuiet, tmuxInteractive, shQuote, commandExists } = require('./exec');
 const {
   DEFAULT_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  MAX_SIDEBAR_WIDTH,
   clampWidth,
   recordActiveSession,
   getBookmarkKey,
@@ -92,9 +94,10 @@ function getActiveBookmarkId() {
 }
 
 function setActiveBookmarkId(id) {
-  if (!id) return;
-  activeBookmarkId = id;
-  tmuxQuiet(['set-option', '-t', SESSION_NAME, '@active_bookmark_id', id]);
+  if (id === undefined || id === null) return;
+  activeBookmarkId = id || null;
+  if (id) tmuxQuiet(['set-option', '-t', SESSION_NAME, '@active_bookmark_id', id]);
+  else tmuxQuiet(['set-option', '-u', '-t', SESSION_NAME, '@active_bookmark_id']);
 }
 
 function userShell() {
@@ -211,12 +214,13 @@ function currentSidebarWidth() {
 }
 
 /** Put a pane in the visible right slot (the previous one goes to the background). */
-function showPane(paneId, panes) {
+function showPane(paneId, panes, bookmarkKey = '') {
   const all = panes || listSessionPanes() || [];
   const visible = all.find(p => p.visible);
   const target = all.find(p => p.paneId === paneId);
+  const targetKey = (target && target.bookmark) || bookmarkKey;
   if (visible && visible.paneId === paneId) {
-    rememberTab(visible.bookmark, paneId);
+    rememberTab(visible.bookmark || targetKey, paneId);
     return true;
   }
   let ok;
@@ -229,7 +233,7 @@ function showPane(paneId, panes) {
     ok = tmuxQuiet(['join-pane', '-h', '-d', '-s', paneId, '-t', SIDEBAR_PANE]) !== null;
     setSidebarWidth(width);
   }
-  if (ok && target) rememberTab(target.bookmark, paneId);
+  if (ok && targetKey) rememberTab(targetKey, paneId);
   return ok;
 }
 
@@ -246,14 +250,14 @@ function switchToBookmark(targetBookmark, agentCommand = '', focus = true, tabPa
   const wantedTab = tabPaneId && panes.find(p => p.paneId === tabPaneId && p.bookmark === targetId);
 
   if (wantedTab) {
-    showPane(wantedTab.paneId, panes);
+    showPane(wantedTab.paneId, panes, targetId);
   } else if (!visible || visible.bookmark !== targetId) {
     // Bring back the tab that was last shown for this bookmark (or create one)
     const tabs = tabsOf(panes, targetId);
     const remembered = rememberedTab(targetId);
     const tab = tabs.find(t => t.paneId === remembered) || tabs[0];
     const paneId = tab ? tab.paneId : createBackgroundPane(targetBookmark);
-    if (paneId) showPane(paneId, panes);
+    if (paneId) showPane(paneId, panes, targetId);
   }
 
   sendCommand(TERMINAL_PANE, agentCommand);
@@ -282,7 +286,7 @@ function newTab(bookmark = null, agentCommand = '') {
   const panes = listSessionPanes() || [];
   const paneId = createBackgroundPane(bm);
   if (!paneId) return null;
-  showPane(paneId, panes);
+  showPane(paneId, panes, key);
   sendCommand(TERMINAL_PANE, agentCommand);
   if (key !== getActiveBookmarkId()) {
     setActiveBookmarkId(key);
@@ -361,11 +365,16 @@ function ensureTerminalPane() {
   return true;
 }
 
-/** Close every hidden tab of a bookmark (the visible one is left alone). */
+/** Close every hidden tab of a bookmark (the visible one is untagged). */
 function closeBookmarkSession(bookmarkKeyOrObj) {
   const key = sanitizeKey(bookmarkKeyOrObj);
   for (const tab of tabsOf(listSessionPanes(), key)) {
-    if (!tab.visible) tmuxQuiet(['kill-pane', '-t', tab.paneId]);
+    if (!tab.visible) {
+      tmuxQuiet(['kill-pane', '-t', tab.paneId]);
+    } else {
+      tagPane(tab.paneId, '');
+      setPaneStatus(tab.paneId, '');
+    }
   }
   tmuxQuiet(['set-option', '-u', '-t', SESSION_NAME, `@ca_tab_${key}`]);
 }
@@ -538,11 +547,14 @@ function refreshTabBar(panes = null) {
   const key = getActiveBookmarkId();
   const bm = findBookmarkByKey(key);
   const widths = getPaneWidths();
+  const sidebarWidth = (widths && widths.panes >= 2 && widths.paneWidth >= MIN_SIDEBAR_WIDTH && widths.paneWidth <= MAX_SIDEBAR_WIDTH)
+    ? widths.paneWidth
+    : currentSidebarWidth();
   const hints = tmuxQuiet(['show-options', '-t', SESSION_NAME, '-qv', 'status-right']) || '';
   const value = buildTabBar({
     name: bm ? bm.name : '',
     tabs: tabsOf(all, key),
-    sidebarWidth: currentSidebarWidth(),
+    sidebarWidth,
     bookmarkPath: bm ? bm.path : '',
     width: widths ? widths.windowWidth : 0,
     reserved: formatWidth(hints.trim()) + 1
@@ -566,6 +578,8 @@ function handleTabCommand(args) {
       return cycleTab(1);
     case 'prev':
       return cycleTab(-1);
+    case 'resize':
+      return resizeSidebar(parseInt(arg, 10) || 0);
     case 'click':
     case 'click2': {
       // click2: second / third click of a fast series (never opens extra tabs)
@@ -591,13 +605,22 @@ function getMainWindowPaneCount() {
   return out === null ? -1 : parseInt(out.trim(), 10);
 }
 
+function updateClientAttachedWidth(width) {
+  const clamped = clampWidth(width);
+  tmuxQuiet(['set-hook', '-t', SESSION_NAME, 'client-attached', `resize-pane -t ${SIDEBAR_PANE} -x ${clamped}`]);
+}
+
 function resizeSidebar(delta) {
-  const dir = delta < 0 ? '-L' : '-R';
-  return tmuxQuiet(['resize-pane', '-t', SIDEBAR_PANE, dir, Math.abs(delta)]) !== null;
+  const current = currentSidebarWidth();
+  const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, current + delta));
+  return setSidebarWidth(next);
 }
 
 function setSidebarWidth(width) {
-  return tmuxQuiet(['resize-pane', '-t', SIDEBAR_PANE, '-x', clampWidth(width)]) !== null;
+  const clamped = clampWidth(width);
+  const ok = tmuxQuiet(['resize-pane', '-t', SIDEBAR_PANE, '-x', clamped]) !== null;
+  updateClientAttachedWidth(clamped);
+  return ok;
 }
 
 function getPaneWidths() {
@@ -616,7 +639,15 @@ function setStatusRight(value) {
 }
 
 function killSession(session = SESSION_NAME) {
-  return tmuxQuiet(['kill-session', '-t', session]) !== null;
+  const killed = tmuxQuiet(['kill-session', '-t', session]) !== null;
+  if (session === SESSION_NAME) {
+    try {
+      require('./monitor').clearTransientStatuses();
+    } catch (err) {
+      // ignore
+    }
+  }
+  return killed;
 }
 
 /**
@@ -673,8 +704,8 @@ function bindKeys({ switcherKey, newTabKey, popupCommand, tabCommand }) {
   bind('-n', 'F1', 'select-pane', '-t', SIDEBAR_PANE);
   bind('-n', 'F2', 'select-pane', '-t', TERMINAL_PANE);
   bind('-n', 'F3', 'set-option', '-g', 'mouse');
-  bind('-n', 'M-[', 'resize-pane', '-t', SIDEBAR_PANE, '-L', '3');
-  bind('-n', 'M-]', 'resize-pane', '-t', SIDEBAR_PANE, '-R', '3');
+  bind('-n', 'M-[', ...tab('resize -3'));
+  bind('-n', 'M-]', ...tab('resize 3'));
 
   // Tabs: new tab, Alt+1..9, Ctrl+PgUp/PgDn, clicks on the tab bar
   if (newTabKey) bind('-n', newTabKey, ...tab('new'));
@@ -729,6 +760,12 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
   if (sessionExists()) {
     attach();
     return;
+  }
+
+  try {
+    require('./monitor').clearTransientStatuses();
+  } catch (err) {
+    // ignore
   }
 
   const config = loadConfig();
@@ -838,6 +875,7 @@ module.exports = {
   getMainWindowPaneCount,
   resizeSidebar,
   setSidebarWidth,
+  updateClientAttachedWidth,
   getPaneWidths,
   focusPane,
   setStatusRight,

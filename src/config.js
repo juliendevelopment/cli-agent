@@ -104,6 +104,9 @@ function normalizeConfig(config) {
   if (!Array.isArray(config.bookmarks)) {
     config.bookmarks = [];
     changed = true;
+  } else if (config.bookmarks.some(bm => !bm || typeof bm !== 'object' || Array.isArray(bm))) {
+    config.bookmarks = config.bookmarks.filter(bm => bm && typeof bm === 'object' && !Array.isArray(bm));
+    changed = true;
   }
   config.bookmarks.forEach((bm, i) => {
     if (!bm.id) {
@@ -139,7 +142,7 @@ function loadConfig() {
   let parsed;
   try {
     parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') throw new Error('not an object');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
   } catch (err) {
     // Never overwrite an unreadable config: back it up and work in memory.
     backupCorruptFile(file, raw);
@@ -202,14 +205,16 @@ function findBookmarkIndex(bookmarks, target) {
   idx = bookmarks.findIndex(b => String(b.name).toLowerCase() === str.toLowerCase());
   if (idx !== -1) return idx;
 
-  if (str.includes('/') || str === '.' || str.startsWith('~')) {
+  if (str.includes('/') || str === '.' || str === '..' || str.startsWith('~')) {
     const resolved = resolvePath(str);
     let best = -1;
     let bestLen = -1;
     bookmarks.forEach((b, i) => {
-      if (b.path && isPathInside(resolved, b.path) && b.path.length > bestLen) {
+      if (!b || !b.path) return;
+      const bmPath = resolvePath(b.path);
+      if (isPathInside(resolved, bmPath) && bmPath.length > bestLen) {
         best = i;
-        bestLen = b.path.length;
+        bestLen = bmPath.length;
       }
     });
     return best;

@@ -64,6 +64,8 @@ test('findBookmarkIndex matches index, id, name and path', () => {
   assert.equal(config.findBookmarkIndex(bms, '/srv/frontend'), -1);
   assert.equal(config.findBookmarkIndex(bms, ''), -1);
   assert.equal(config.findBookmarkIndex(bms, 'nope'), -1);
+  // Trailing slash in bookmark path still matches exact path
+  assert.equal(config.findBookmarkIndex([{ id: 's', name: 'S', path: '/srv/front/' }], '/srv/front'), 0);
 });
 
 test('first run creates a default config', () => {
@@ -129,4 +131,26 @@ test('recordActiveSession keeps a deduplicated history', () => {
   config.recordActiveSession('a');
   assert.deepEqual(config.getRecentHistory(), ['a', 'b']);
   assert.equal(config.loadConfig().activeBookmarkId, 'a');
+});
+
+test('loadConfig rejects top-level JSON array and filters null bookmarks', () => {
+  reset();
+  fs.mkdirSync(path.dirname(configFile()), { recursive: true });
+  fs.writeFileSync(configFile(), '[]');
+  const origWrite = process.stderr.write;
+  process.stderr.write = () => true;
+  let cfg;
+  try {
+    cfg = config.loadConfig();
+  } finally {
+    process.stderr.write = origWrite;
+  }
+  assert.equal(cfg.__corrupt, true);
+
+  reset();
+  fs.mkdirSync(path.dirname(configFile()), { recursive: true });
+  fs.writeFileSync(configFile(), JSON.stringify({ bookmarks: [null, { name: 'Valid', path: '/tmp' }] }));
+  const cleaned = config.loadConfig();
+  assert.equal(cleaned.bookmarks.length, 1);
+  assert.equal(cleaned.bookmarks[0].name, 'Valid');
 });

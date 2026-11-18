@@ -49,6 +49,7 @@ function ensureAliasLink() {
   } catch (err) {
     // free
   }
+  if (commandExists('ca')) return 'taken';
   try {
     fs.symlinkSync(INSTALLED_ENTRY, ALIAS_LINK);
     return 'created';
@@ -218,13 +219,14 @@ function readHookPayload() {
  * 1. the CLI-Agent tmux pane the agent runs in ($TMUX_PANE),
  * 2. the project directory from the hook payload / environment.
  */
-function findHookBookmark(config) {
+function findHookTarget(config) {
   const { isInsideCliAgent } = require('./tmux');
   const { bookmarkKeyForPane } = require('./monitor');
-  if (isInsideCliAgent() && process.env.TMUX_PANE) {
-    const key = bookmarkKeyForPane(process.env.TMUX_PANE);
+  const paneId = isInsideCliAgent() && process.env.TMUX_PANE ? process.env.TMUX_PANE : '';
+  if (paneId) {
+    const key = bookmarkKeyForPane(paneId);
     const bm = key && config.bookmarks.find(b => getBookmarkKey(b) === key);
-    if (bm) return bm;
+    if (bm) return { bookmark: bm, paneId };
   }
   const payload = readHookPayload();
   const reported = [
@@ -238,10 +240,10 @@ function findHookBookmark(config) {
   for (const dir of candidates) {
     if (typeof dir === 'string' && path.isAbsolute(dir)) {
       const bm = findBookmark(config, dir);
-      if (bm) return bm;
+      if (bm) return { bookmark: bm, paneId };
     }
   }
-  return null;
+  return { bookmark: null, paneId: '' };
 }
 
 function handleNotify(rawArgs) {
@@ -271,15 +273,15 @@ function handleNotify(rawArgs) {
   if (!statusKey) fail(`Unknown status "${rawStatus}". Use: input, running, done, error, rate_limit, clear`);
 
   const config = loadConfig();
-  const bookmark = hook ? findHookBookmark(config) : findBookmark(config, target);
+  const { bookmark, paneId } = hook ? findHookTarget(config) : { bookmark: findBookmark(config, target), paneId: '' };
   if (!bookmark) fail(`Bookmark not found: ${target}`);
 
   const key = getBookmarkKey(bookmark);
   if (statusKey === 'clear') {
-    clearManualStatus(key);
-    clearManualStatus(bookmark.name);
+    clearManualStatus(key, paneId);
+    if (!paneId) clearManualStatus(bookmark.name);
   } else {
-    saveManualStatus(key, statusKey, message);
+    saveManualStatus(key, statusKey, message, paneId);
   }
   if (!quiet) {
     console.log(`${colors.green}✓ Status of "${bookmark.name}" set to: ${statusKey}${colors.reset}`);
@@ -471,7 +473,6 @@ function handleUninstall(args) {
     return;
   }
 
-  killSession();
   const { INTEGRATIONS } = require('./integrations');
   for (const integ of INTEGRATIONS) {
     try {
@@ -482,6 +483,7 @@ function handleUninstall(args) {
   }
   for (const t of targets) fs.rmSync(t, { recursive: true, force: true });
   console.log(`\n${colors.green}✓ CLI-Agent uninstalled.${colors.reset}\n`);
+  killSession();
 }
 
 // ---------------------------------------------------------------------------

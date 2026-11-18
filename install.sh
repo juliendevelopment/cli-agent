@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -eo pipefail
 
 # CLI-Agent Installer
 # One-liner install:
@@ -60,8 +60,8 @@ TMUX_VERSION=$(tmux -V)
 echo -e "${C_GREEN}✓${C_RESET} tmux detected (${TMUX_VERSION})"
 
 # The quick switcher popup needs tmux >= 3.2
-TMUX_MAJOR=$(echo "${TMUX_VERSION}" | sed -E 's/[^0-9]*([0-9]+)\.([0-9]+).*/\1/')
-TMUX_MINOR=$(echo "${TMUX_VERSION}" | sed -E 's/[^0-9]*([0-9]+)\.([0-9]+).*/\2/')
+TMUX_MAJOR=$(echo "${TMUX_VERSION}" | sed -nE 's/[^0-9]*([0-9]+)\.([0-9]+).*/\1/p')
+TMUX_MINOR=$(echo "${TMUX_VERSION}" | sed -nE 's/[^0-9]*([0-9]+)\.([0-9]+).*/\2/p')
 if [ -n "${TMUX_MAJOR}" ] && { [ "${TMUX_MAJOR}" -lt 3 ] || { [ "${TMUX_MAJOR}" -eq 3 ] && [ "${TMUX_MINOR}" -lt 2 ]; }; }; then
     echo -e "${C_YELLOW}⚠️ tmux >= 3.2 is recommended (the Ctrl+E switcher popup will not work).${C_RESET}"
 fi

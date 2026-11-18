@@ -266,7 +266,7 @@ Example:
   "switcherKey": "C-e",
   "newTabKey": "C-t",
   "agents": [
-    { "id": "gemini", "name": "Gemini CLI", "command": "gemini", "shortcut": "g" },
+    { "id": "gemini", "name": "Gemini CLI", "command": "gemini", "shortcut": "m" },
     { "id": "claude", "command": "claude --continue" }
   ],
   "bookmarks": [

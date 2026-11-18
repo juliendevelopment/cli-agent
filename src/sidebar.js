@@ -30,6 +30,7 @@ const {
   newTabKeyOf,
   resizeSidebar,
   setSidebarWidth,
+  updateClientAttachedWidth,
   getPaneWidths,
   focusPane,
   setStatusRight,
@@ -249,17 +250,7 @@ class SidebarApp {
       changed = true;
     }
 
-    // Tab bar: names follow the running command, icons follow the status
-    refreshTabBar(all);
-
-    // 2. Git info, asynchronously (never blocks key handling)
-    const now = Date.now();
-    if (now - this.lastGitCheck > GIT_INTERVAL_MS && this.gitInFlight === 0) {
-      this.lastGitCheck = now;
-      this.refreshGitInfo();
-    }
-
-    // 3. tmux status bar alert
+    // 2. tmux status bar alert (before refreshTabBar so reserved width is up to date)
     const anyInputRequired = this.config.bookmarks.some(bm => {
       const s = this.bookmarkStatuses[getBookmarkKey(bm)];
       return s && s.id === STATUS_TYPES.INPUT_REQUIRED.id;
@@ -268,6 +259,16 @@ class SidebarApp {
       this.hasActiveAlert = anyInputRequired;
       setStatusRight(statusRight(this.config.switcherKey || 'C-e', anyInputRequired, newTabKeyOf(this.config)));
       changed = true;
+    }
+
+    // Tab bar: names follow the running command, icons follow the status
+    refreshTabBar(all);
+
+    // 3. Git info, asynchronously (never blocks key handling)
+    const now = Date.now();
+    if (now - this.lastGitCheck > GIT_INTERVAL_MS && this.gitInFlight === 0) {
+      this.lastGitCheck = now;
+      this.refreshGitInfo();
     }
 
     if (changed || forceRender) this.render();
@@ -334,6 +335,7 @@ class SidebarApp {
 
   persistSidebarWidth(width) {
     if (clampWidth(width) !== width) return;
+    updateClientAttachedWidth(width);
     if (this.saveWidthTimer) clearTimeout(this.saveWidthTimer);
     this.saveWidthTimer = setTimeout(() => {
       try {
@@ -478,7 +480,9 @@ class SidebarApp {
         setTimeout(() => this.handleResize(), 60);
         return undefined;
       case 'w': {
-        this.widthPresetIndex = (this.widthPresetIndex + 1) % this.widthPresets.length;
+        const curWidth = this.getRealSidebarWidth() || this.config.sidebarWidth;
+        const nextIdx = this.widthPresets.findIndex(w => w > curWidth);
+        this.widthPresetIndex = nextIdx === -1 ? 0 : nextIdx;
         const targetWidth = this.widthPresets[this.widthPresetIndex];
         setSidebarWidth(targetWidth);
         this.persistSidebarWidth(targetWidth);
@@ -520,6 +524,7 @@ class SidebarApp {
 
     switchToBookmark(current, cmd, true);
     this.lastActiveId = getBookmarkKey(current);
+    this.runMonitorCheck(true);
     this.setStatus(`Switched to "${current.name}"`);
   }
 
@@ -691,9 +696,14 @@ class SidebarApp {
         const next = this.getCurrentBookmark();
         switchToBookmark(next, '', false);
         this.lastActiveId = getBookmarkKey(next);
+      } else if (wasActive) {
+        setActiveBookmarkId('');
+        this.lastActiveId = null;
       }
       closeBookmarkSession(removedKey);
       clearManualStatus(removedKey);
+      clearManualStatus(removed.name);
+      this.runMonitorCheck(true);
     }
 
     this.mode = 'normal';

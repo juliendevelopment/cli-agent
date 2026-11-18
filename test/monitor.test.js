@@ -99,3 +99,38 @@ test('manual statuses are saved and cleared (not frozen to idle)', () => {
   monitor.clearManualStatus('k');
   assert.equal('k' in monitor.loadManualStatuses(), false);
 });
+
+test('per-pane hook statuses stay scoped to their tab and clearTransientStatuses drops running/input', () => {
+  monitor.saveManualStatus('proj', 'input_required', '', '%1');
+  monitor.saveManualStatus('proj', 'done', '', '%2');
+  const entry = monitor.getManualStatus(monitor.loadManualStatuses(), 'proj');
+  const agentNames = new Set(['claude', 'node']);
+  const tabs = [
+    { paneId: '%1', command: 'claude' },
+    { paneId: '%2', command: 'claude' },
+    { paneId: '%3', command: 'node' }
+  ];
+  const { status, tabStatuses } = monitor.computeBookmarkStatus(tabs, entry, agentNames, 5);
+  assert.equal(tabStatuses.get('%1'), S.INPUT_REQUIRED);
+  assert.equal(tabStatuses.get('%2'), S.DONE);
+  assert.equal(tabStatuses.get('%3'), S.IDLE);
+  assert.equal(status, S.INPUT_REQUIRED);
+
+  // If %1 exited back to bash while %3 still runs node, %1's transient input_required is dropped
+  const afterExit = monitor.computeBookmarkStatus(
+    [{ paneId: '%1', command: 'bash' }, { paneId: '%3', command: 'node' }],
+    entry,
+    agentNames,
+    5
+  );
+  assert.equal(afterExit.tabStatuses.get('%1'), S.IDLE);
+  assert.equal(afterExit.tabStatuses.get('%3'), S.IDLE);
+  assert.equal(afterExit.status, S.IDLE);
+
+  monitor.saveManualStatus('runningProj', 'running', '', '%9');
+  monitor.clearTransientStatuses();
+  const remaining = monitor.loadManualStatuses();
+  assert.equal('runningProj' in remaining, false);
+  assert.equal(remaining.proj.status, 'done');
+  assert.equal('panes' in remaining.proj, false);
+});
