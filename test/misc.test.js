@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 const { shQuote, commandExists } = require('../src/exec');
 const { getAgents, RESERVED_KEYS } = require('../src/agents');
 const { keyLabel } = require('../src/tmux');
-const { STATUS_ALIASES } = require('../src/index');
+const { STATUS_ALIASES, extractCommitFromTarEntry, formatUpdateSummary } = require('../src/index');
 const { stripAnsi, truncate } = require('../src/ui');
 
 test('shQuote survives quotes, $ and backticks', () => {
@@ -60,4 +60,23 @@ test('truncate handles non-positive maxLen and surrogate pairs safely', () => {
   assert.equal(truncate('hello', -2), '');
   assert.equal(truncate('🚀🔥✨🎉', 4), '🚀🔥✨🎉');
   assert.equal(truncate('🚀🔥✨🎉🥳', 4), '🚀...');
+});
+
+test('extractCommitFromTarEntry and formatUpdateSummary track commits across updates', () => {
+  assert.equal(extractCommitFromTarEntry('juliendevelopment-cli-agent-a803a10/'), 'a803a10');
+  assert.equal(extractCommitFromTarEntry('juliendevelopment-cli-agent-a803a101234567890/README.md'), 'a803a10');
+  assert.equal(extractCommitFromTarEntry('cli-agent/'), '');
+
+  assert.equal(
+    formatUpdateSummary({ oldVersion: '1.0.0', newVersion: '1.1.0', oldSha: '1111111', newSha: 'a803a10' }),
+    '✨ CLI-Agent updated: v1.0.0 → v1.1.0 (a803a10)'
+  );
+  assert.equal(
+    formatUpdateSummary({ oldVersion: '1.1.0', newVersion: '1.1.0', oldSha: 'a803a10', newSha: 'a803a10' }),
+    '✓ CLI-Agent is already up to date (v1.1.0 · a803a10).'
+  );
+  assert.equal(
+    formatUpdateSummary({ oldVersion: '1.1.0', newVersion: '1.1.0', oldSha: 'a803a10', newSha: 'b914c22' }),
+    '✨ CLI-Agent updated: v1.1.0 (a803a10 → b914c22)'
+  );
 });

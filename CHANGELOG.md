@@ -5,7 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-18
+
 ### Fixed
+- Hook statuses are now scoped per tab (`$TMUX_PANE`), and transient statuses (`running`, `input_required`) are cleared when the workspace session closes or restarts.
+- Sidebar resize (`<`, `>`, `M-[`, `M-]`, `w`) is clamped to valid bounds and kept across tmux re-attaches; deleting the last bookmark no longer leaves a tagged orphan pane.
+- Git branch detection also works for bookmarks pointing inside repository subdirectories.
+- `cli-agent update` tracks the installed commit SHA when updating from `main` (instead of printing `v1.0.0 → v1.0.0`) and downloads to a temporary archive before extracting.
 - Bookmarks can no longer be lost: the config is written atomically, and an unreadable `bookmarks.json` is backed up to `bookmarks.json.corrupt` instead of being overwritten.
 - Typing `exit` in the right terminal recreates a shell instead of killing every session.
 - `r` in the sidebar and `cli-agent notify … clear` really clear the status (they used to freeze it on "Idle"). Manual statuses now expire after 1 hour.

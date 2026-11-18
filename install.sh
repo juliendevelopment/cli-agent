@@ -82,6 +82,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo
 if [ -f "${SCRIPT_DIR}/bin/cli-agent.js" ] && [ "${SCRIPT_DIR}" != "${INSTALL_DIR}" ]; then
     echo -e "${C_CYAN}📦 Installing from local source files...${C_RESET}"
     cp -r "${SCRIPT_DIR}"/* "${INSTALL_DIR}/"
+    if command -v git >/dev/null 2>&1 && git -C "${SCRIPT_DIR}" rev-parse --short=7 HEAD >/dev/null 2>&1; then
+        git -C "${SCRIPT_DIR}" rev-parse --short=7 HEAD > "${INSTALL_DIR}/.commit"
+    else
+        rm -f "${INSTALL_DIR}/.commit"
+    fi
 else
     # Latest tagged release, falling back to main when none is published yet
     TARBALL_URL=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
@@ -90,7 +95,17 @@ else
         TARBALL_URL="https://api.github.com/repos/${REPO}/tarball/main"
     fi
     echo -e "${C_CYAN}📦 Downloading ${TARBALL_URL##*/}...${C_RESET}"
-    curl -fsSL "${TARBALL_URL}" | tar -xz --strip-components=1 -C "${INSTALL_DIR}"
+    TMP_TAR=$(mktemp)
+    trap 'rm -f "${TMP_TAR:-}"' EXIT
+    curl -fsSL -o "${TMP_TAR}" "${TARBALL_URL}"
+    TOP_ENTRY=$(tar -tzf "${TMP_TAR}" | awk 'NR==1{print}' || true)
+    COMMIT_SHA=$(printf '%s' "${TOP_ENTRY}" | sed -nE 's/^[^/]+-([0-9a-f]{7,40})(\/|$).*/\1/p' | cut -c1-7 || true)
+    tar -xzf "${TMP_TAR}" --strip-components=1 -C "${INSTALL_DIR}"
+    if [ -n "${COMMIT_SHA}" ]; then
+        printf '%s\n' "${COMMIT_SHA}" > "${INSTALL_DIR}/.commit"
+    else
+        rm -f "${INSTALL_DIR}/.commit"
+    fi
 fi
 
 # 5. Make executable & create symlink

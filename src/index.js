@@ -1,7 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const {
   loadConfig,
   addBookmark,
@@ -15,7 +15,7 @@ const {
 } = require('./config');
 const { startWorkspace, killSession, getTmuxVersion, keyLabel, newTabKeyOf } = require('./tmux');
 const { getAgentsWithStatus } = require('./agents');
-const { commandExists, shQuote } = require('./exec');
+const { commandExists } = require('./exec');
 const { colors } = require('./ui');
 const { VERSION } = require('./version');
 
@@ -364,7 +364,9 @@ function handleDoctor() {
     console.log(`  ${colors.red}✗${colors.reset} ${msg}`);
   };
 
-  console.log(`\n${colors.bold}CLI-Agent doctor${colors.reset} (v${VERSION})\n`);
+  const sha = readInstalledCommit();
+  const verLabel = sha ? `v${VERSION} · ${sha}` : `v${VERSION}`;
+  console.log(`\n${colors.bold}CLI-Agent doctor${colors.reset} (${verLabel})\n`);
 
   const nodeMajor = parseInt(process.versions.node.split('.')[0], 10);
   if (nodeMajor >= 18) ok(`Node.js ${process.version}`);
@@ -410,9 +412,55 @@ function handleDoctor() {
   if (problems) process.exit(1);
 }
 
+function readInstalledCommit(dir = INSTALL_DIR) {
+  try {
+    const sha = fs.readFileSync(path.join(dir, '.commit'), 'utf-8').trim();
+    if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha.slice(0, 7);
+  } catch (err) {
+    // not recorded yet
+  }
+  return '';
+}
+
+function extractCommitFromTarEntry(entry) {
+  const m = /^[^/]+-([0-9a-f]{7,40})(?:\/|$)/.exec(String(entry || '').trim());
+  return m ? m[1].slice(0, 7) : '';
+}
+
+function fetchMainHeadSha() {
+  try {
+    const sha = execFileSync('curl', [
+      '-fsSL', '-H', 'Accept: application/vnd.github.sha',
+      `https://api.github.com/repos/${REPO}/commits/main`
+    ], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10000
+    }).trim();
+    return /^[0-9a-f]{7,40}$/i.test(sha) ? sha.slice(0, 7) : '';
+  } catch (err) {
+    return '';
+  }
+}
+
+function formatUpdateSummary({ oldVersion, newVersion, oldSha, newSha }) {
+  if (newVersion !== oldVersion) {
+    const shaTag = newSha ? ` (${newSha})` : '';
+    return `✨ CLI-Agent updated: v${oldVersion} → v${newVersion}${shaTag}`;
+  }
+  if (oldSha && newSha && oldSha === newSha) {
+    return `✓ CLI-Agent is already up to date (v${newVersion} · ${newSha}).`;
+  }
+  if (newSha) {
+    const diff = oldSha ? `${oldSha} → ${newSha}` : newSha;
+    return `✨ CLI-Agent updated: v${newVersion} (${diff})`;
+  }
+  return `✨ CLI-Agent updated: v${newVersion}`;
+}
+
 function fetchLatestTarballUrl() {
   try {
-    const json = execSync(`curl -fsSL https://api.github.com/repos/${REPO}/releases/latest`, {
+    const json = execFileSync('curl', ['-fsSL', `https://api.github.com/repos/${REPO}/releases/latest`], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 15000
@@ -429,18 +477,39 @@ function handleUpdate() {
   console.log(`\n${colors.bold}${colors.brightCyan}🔄 Updating CLI-Agent...${colors.reset}`);
   fs.mkdirSync(INSTALL_DIR, { recursive: true });
 
+  const tmpTar = path.join(os.tmpdir(), `cli-agent-update-${process.pid}-${Date.now()}.tar.gz`);
   try {
+    const oldSha = readInstalledCommit();
     const { url, label } = fetchLatestTarballUrl();
+    let remoteSha = '';
+
+    if (label === 'main' && oldSha) {
+      remoteSha = fetchMainHeadSha();
+      if (remoteSha && remoteSha === oldSha) {
+        ensureAliasLink();
+        console.log(`\n${colors.green}${formatUpdateSummary({ oldVersion: VERSION, newVersion: VERSION, oldSha, newSha: remoteSha })}${colors.reset}\n`);
+        return;
+      }
+    }
+
     console.log(`${colors.gray}Downloading ${label}...${colors.reset}`);
-    const tarCmd = `tar -xz --strip-components=1 -C ${shQuote(INSTALL_DIR)}`;
-    execSync(`curl -fsSL ${shQuote(url)} | ${tarCmd}`, { stdio: 'inherit', shell: '/bin/bash' });
+    execFileSync('curl', ['-fsSL', '-o', tmpTar, url], { stdio: 'inherit' });
+    const firstEntry = execFileSync('tar', ['-tzf', tmpTar], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).split('\n')[0];
+    const tarSha = extractCommitFromTarEntry(firstEntry);
+    execFileSync('tar', ['-xzf', tmpTar, '--strip-components=1', '-C', INSTALL_DIR], { stdio: 'inherit' });
+
+    const newSha = tarSha || remoteSha || (label === 'main' ? fetchMainHeadSha() : '');
+    if (newSha) fs.writeFileSync(path.join(INSTALL_DIR, '.commit'), `${newSha}\n`, 'utf-8');
 
     const binFile = path.join(INSTALL_DIR, 'bin', 'cli-agent.js');
     if (fs.existsSync(binFile)) fs.chmodSync(binFile, 0o755);
 
     ensureAliasLink();
     const newVersion = JSON.parse(fs.readFileSync(path.join(INSTALL_DIR, 'package.json'), 'utf-8')).version;
-    console.log(`\n${colors.bold}${colors.green}✨ CLI-Agent updated: v${VERSION} → v${newVersion}${colors.reset}`);
+    console.log(`\n${colors.bold}${colors.green}${formatUpdateSummary({ oldVersion: VERSION, newVersion, oldSha, newSha })}${colors.reset}`);
     console.log(`${colors.gray}Your bookmarks in ${shrinkPath(getConfigDir())} were preserved.${colors.reset}`);
     console.log(`${colors.gray}Restart the workspace (cli-agent kill && cli-agent) to use the new version.${colors.reset}\n`);
   } catch (err) {
@@ -448,6 +517,8 @@ function handleUpdate() {
     console.log('You can also re-run the install command:');
     console.log(`  ${colors.yellow}curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash${colors.reset}\n`);
     process.exit(1);
+  } finally {
+    fs.rmSync(tmpTar, { force: true });
   }
 }
 
@@ -560,4 +631,4 @@ function main() {
   }
 }
 
-module.exports = { main, STATUS_ALIASES };
+module.exports = { main, STATUS_ALIASES, extractCommitFromTarEntry, formatUpdateSummary };
