@@ -23,6 +23,10 @@ const {
   newTab,
   refreshTabBar,
   setPaneStatus,
+  rememberedTabs,
+  tabsOf,
+  tabLabelText,
+  TAB_ICONS,
   newTabKeyOf,
   resizeSidebar,
   setSidebarWidth,
@@ -71,7 +75,9 @@ class SidebarApp {
     this.hasActiveAlert = false;
     this.lastActiveId = null;
     this.rowMap = {};
-    this.tabCounts = {};
+    this.tabsByKey = {};
+    this.tabsSignature = '';
+    this.scrollLine = 0;
     this.paneStatusCache = {};
     this.missingTerminalTicks = 0;
 
@@ -209,21 +215,38 @@ class SidebarApp {
     // 1. Statuses: one tmux call for all panes, one capture per tab
     const manual = loadManualStatuses();
     const { panes, all } = getSessionPanes();
+    const tabsByKey = {};
     for (const bm of this.config.bookmarks) {
       const key = getBookmarkKey(bm);
       const tabs = panes.get(key) || [];
       const manualEntry = getManualStatus(manual, key) || getManualStatus(manual, bm.name);
       const { status, tabStatuses } = computeBookmarkStatus(tabs, manualEntry, this.agentNames);
       for (const tab of tabs) this.updatePaneStatus(tab, tabStatuses.get(tab.paneId));
-      if (this.tabCounts[key] !== tabs.length) {
-        this.tabCounts[key] = tabs.length;
-        changed = true;
-      }
+      tabsByKey[key] = tabsOf(tabs, key);
       const prev = this.bookmarkStatuses[key];
       if (!prev || prev.id !== status.id) {
         this.bookmarkStatuses[key] = status;
         changed = true;
       }
+    }
+
+    // Tabs listed under each bookmark: re-render when one changes
+    const remembered = rememberedTabs();
+    for (const bm of this.config.bookmarks) {
+      const key = getBookmarkKey(bm);
+      const tabs = tabsByKey[key] || [];
+      const current = key === activeId ? (tabs.find(t => t.visible) || {}).paneId : remembered[key];
+      for (const tab of tabs) {
+        tab.label = tabLabelText(tab, bm.path);
+        tab.isCurrent = tab.paneId === current;
+      }
+    }
+    const signature = JSON.stringify(Object.entries(tabsByKey).map(([k, tabs]) =>
+      [k, tabs.map(t => [t.paneId, t.label, t.status, t.visible, t.isCurrent])]));
+    this.tabsByKey = tabsByKey;
+    if (signature !== this.tabsSignature) {
+      this.tabsSignature = signature;
+      changed = true;
     }
 
     // Tab bar: names follow the running command, icons follow the status
@@ -368,11 +391,21 @@ class SidebarApp {
   }
 
   handleMouseClick(row) {
-    const index = this.rowMap[row];
-    if (index === undefined) return;
-    this.selectedIndex = index;
+    const target = this.rowMap[row];
+    if (!target) return;
+    this.selectedIndex = target.index;
     this.scheduleSelectionSave();
-    this.activateSelectedBookmark('');
+    if (target.paneId) this.activateTab(target.paneId);
+    else this.activateSelectedBookmark('');
+  }
+
+  /** Show one tab of the selected bookmark (click on a tab row). */
+  activateTab(paneId) {
+    const current = this.getCurrentBookmark();
+    if (!current) return;
+    switchToBookmark(current, '', true, paneId);
+    this.lastActiveId = getBookmarkKey(current);
+    this.runMonitorCheck(true);
   }
 
   moveSelection(delta) {
@@ -757,6 +790,55 @@ class SidebarApp {
     return lines;
   }
 
+  /**
+   * Lines of one bookmark: its name, its status / git branch, then one line
+   * per open tab (clickable: shows that tab).
+   */
+  bookmarkLines(bm, i, width, activeId) {
+    const isSelected = i === this.selectedIndex;
+    const key = getBookmarkKey(bm);
+    const isActiveView = key === activeId;
+    const status = this.bookmarkStatuses[key] || STATUS_TYPES.IDLE;
+    const git = this.gitInfoCache[key];
+    const tabs = this.tabsByKey[key] || [];
+    const out = [];
+
+    const prefix = isSelected ? `${colors.brightGreen}▶ ${colors.reset}` : (isActiveView ? `${colors.brightCyan}• ${colors.reset}` : '  ');
+    const nameText = truncate(`${i + 1}. ${bm.name}`, width - 3);
+    const style = isSelected ? `${colors.bold}${colors.brightGreen}` : (isActiveView ? `${colors.bold}${colors.white}` : `${colors.dim}${colors.white}`);
+    out.push({ text: `${prefix}${style}${nameText}${colors.reset}`, target: { index: i } });
+
+    let gitTag = '';
+    if (git) {
+      const room = width - 3 - visibleLength(statusBadge(status)) - 1;
+      const branch = git.branch ? truncate(git.branch, Math.max(0, room - 2)) : '';
+      gitTag = room > 4 && branch
+        ? ` ${colors.gray}${branch}${colors.reset}${git.isDirty ? `${colors.brightYellow}*${colors.reset}` : ''}`
+        : (git.isDirty ? ` ${colors.brightYellow}*${colors.reset}` : '');
+    }
+    out.push({ text: `   ${statusBadge(status)}${gitTag}`, target: { index: i } });
+
+    tabs.forEach((tab, n) => {
+      const branch = n === tabs.length - 1 ? '└' : '├';
+      const icon = TAB_ICONS[tab.status] ? ` ${TAB_ICONS[tab.status]}` : '';
+      const mark = tab.isCurrent ? ' ●' : '';
+      // "   ├ 1 " + label + icon + mark must fit in the pane
+      const room = Math.max(3, width - 7 - String(n + 1).length - (icon ? 3 : 0) - mark.length);
+      const label = truncate(tab.label || tab.command || 'shell', room);
+      let text;
+      if (tab.visible) {
+        text = `   ${colors.gray}${branch}${colors.reset} ${colors.bold}${colors.brightCyan}${n + 1} ${label}${colors.reset}`;
+      } else if (tab.status === 'input_required') {
+        text = `   ${colors.gray}${branch}${colors.reset} ${colors.bold}${colors.brightYellow}${n + 1} ${label}${colors.reset}`;
+      } else {
+        text = `   ${colors.gray}${branch}${colors.reset} ${n + 1} ${label}`;
+      }
+      text += `${icon}${mark ? `${colors.gray}${mark}${colors.reset}` : ''}`;
+      out.push({ text, target: { index: i, paneId: tab.paneId } });
+    });
+    return out;
+  }
+
   render() {
     const width = Math.max(16, process.stdout.columns || 26);
     const height = Math.max(10, process.stdout.rows || 24);
@@ -781,47 +863,34 @@ class SidebarApp {
       lines.push(`${colors.gray}No bookmarks yet.${colors.reset}`);
       lines.push(`${colors.cyan}[a] to add one.${colors.reset}`);
     } else {
+      // Like the Ctrl+E switcher: each bookmark, then its tabs as a tree
       const activeId = getActiveBookmarkId();
-      const available = height - lines.length - bottom.length - statusLines.length;
-      const maxDisplay = Math.max(1, Math.floor(available / 2));
-      let startIdx = 0;
-      if (this.selectedIndex >= maxDisplay) startIdx = this.selectedIndex - maxDisplay + 1;
-      const endIdx = Math.min(count, startIdx + maxDisplay);
+      const entries = []; // { text, target: { index, paneId? }, index }
+      this.config.bookmarks.forEach((bm, i) => {
+        for (const line of this.bookmarkLines(bm, i, width, activeId)) entries.push({ ...line, index: i });
+      });
 
-      for (let i = startIdx; i < endIdx; i++) {
-        const bm = this.config.bookmarks[i];
-        const isSelected = i === this.selectedIndex;
-        const key = getBookmarkKey(bm);
-        const isActiveView = key === activeId;
-        const status = this.bookmarkStatuses[key] || STATUS_TYPES.IDLE;
-        const git = this.gitInfoCache[key];
+      // Scroll so the whole selected bookmark (name + tabs) stays visible
+      const available = Math.max(2, height - lines.length - bottom.length - statusLines.length);
+      const first = entries.findIndex(e => e.index === this.selectedIndex);
+      const last = entries.length - 1 - [...entries].reverse().findIndex(e => e.index === this.selectedIndex);
+      let scroll = Math.min(this.scrollLine, Math.max(0, entries.length - available));
+      if (first < scroll) scroll = first;
+      if (last >= scroll + available) scroll = Math.min(first, last - available + 1);
+      this.scrollLine = Math.max(0, scroll);
+      const shown = entries.slice(this.scrollLine, this.scrollLine + available);
 
-        const prefix = isSelected ? `${colors.brightGreen}▶ ${colors.reset}` : (isActiveView ? `${colors.brightCyan}• ${colors.reset}` : '  ');
-        const nameText = truncate(`${i + 1}. ${bm.name}`, width - 3);
-        const style = isSelected ? `${colors.bold}${colors.brightGreen}` : (isActiveView ? `${colors.bold}${colors.white}` : `${colors.dim}${colors.white}`);
-
+      for (const entry of shown) {
         // Rows are 1-based in terminal mouse coordinates
-        this.rowMap[lines.length + 1] = i;
-        lines.push(`${prefix}${style}${nameText}${colors.reset}`);
-
-        let gitTag = '';
-        if (git) {
-          const room = width - 3 - visibleLength(statusBadge(status)) - 1 - (this.tabCounts[key] > 1 ? 3 : 0);
-          const branch = git.branch ? truncate(git.branch, Math.max(0, room - 2)) : '';
-          gitTag = room > 4 && branch
-            ? ` ${colors.gray}${branch}${colors.reset}${git.isDirty ? `${colors.brightYellow}*${colors.reset}` : ''}`
-            : (git.isDirty ? ` ${colors.brightYellow}*${colors.reset}` : '');
-        }
-        const tabCount = this.tabCounts[key] || 0;
-        const tabTag = tabCount > 1 ? ` ${colors.brightCyan}⧉${tabCount}${colors.reset}` : '';
-        this.rowMap[lines.length + 1] = i;
-        lines.push(`   ${statusBadge(status)}${tabTag}${gitTag}`);
+        this.rowMap[lines.length + 1] = entry.target;
+        lines.push(entry.text);
       }
 
-      if (endIdx < count || startIdx > 0) {
-        // Replace nothing: scroll hint folded into the title line
+      if (shown.length < entries.length) {
+        const from = shown[0].index + 1;
+        const to = shown[shown.length - 1].index + 1;
         lines[lines.findIndex(l => l.includes('PROJECTS ('))] =
-          `${colors.bold}${colors.brightYellow}PROJECTS (${count})${colors.reset} ${colors.gray}${startIdx + 1}-${endIdx}${colors.reset}`;
+          `${colors.bold}${colors.brightYellow}PROJECTS (${count})${colors.reset} ${colors.gray}${from}-${to}${colors.reset}`;
       }
     }
 

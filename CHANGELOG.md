@@ -11,6 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - `r` in the sidebar and `cli-agent notify … clear` really clear the status (they used to freeze it on "Idle"). Manual statuses now expire after 1 hour.
 - `cli-agent remove "Name"` finds bookmarks by name, index, id or path.
 - Mouse clicks select the right bookmark when the alert line is shown or the list is scrolled.
+- Clicking a tab in the tab bar works for every tab (range names contained a `%` that tmux expanded, so only some tabs reacted), and fast clicks (within 300 ms of the previous one) are no longer lost.
 - Pasting text into the add / edit fields works.
 - Deleting the active bookmark switches to another one before closing its terminal.
 - Paths containing `"`, `$` or backquotes no longer break tmux commands (no shell is used anymore).
@@ -24,7 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - All UI messages are in English.
 
 ### Added
-- Tabs: several terminals per bookmark (e.g. Claude Code in one, a shell in another). A tab bar at the top shows the active bookmark's tabs with their status; `Ctrl+T` (`newTabKey`) or the `+` button opens a tab in the bookmark's directory, `Alt+1…9`, `Ctrl+PgUp/PgDn` or a click switches tabs, `exit` closes one, `t` in the sidebar opens a tab for the selected bookmark. The Ctrl+E switcher lists each bookmark's tabs under it, with their status, and can jump to a given tab. The sidebar shows the tab count (`⧉2`) and the most urgent status of all tabs.
+- Tabs: several terminals per bookmark (e.g. Claude Code in one, a shell in another). A tab bar at the top shows the active bookmark's tabs with their status; `Ctrl+T` (`newTabKey`) or the `+` button opens a tab in the bookmark's directory, `Alt+1…9`, `Ctrl+PgUp/PgDn` or a click switches tabs, `exit` closes one, `t` in the sidebar opens a tab for the selected bookmark. The Ctrl+E switcher lists each bookmark's tabs under it, with their status, and can jump to a given tab. The sidebar lists each bookmark's tabs under it (clickable), like the switcher, and shows the most urgent status of all tabs. Tabs are named automatically (`claude · Fix login form`, `fish · web`) from the program, its terminal title or the shell's folder, and are wider in the tab bar, sized to fit the window.
 - `cli-agent hooks [--install|--uninstall] [agents]`: Claude Code, Codex, Copilot CLI, Antigravity CLI (agy) and OpenCode report their own status (running / action required / done) through `cli-agent notify --hook`.
 - Short alias `ca` to launch CLI-Agent (created by the installer, `update`, or on first launch; never replaces an existing `ca`).
 - Built-in agents: Antigravity CLI (`g`), Codex (`x`), OpenCode (`n`).

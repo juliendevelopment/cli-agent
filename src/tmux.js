@@ -1,5 +1,6 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { SOCKET, SESSION_NAME, tmux, tmuxQuiet, tmuxInteractive, shQuote, commandExists } = require('./exec');
 const {
@@ -118,12 +119,13 @@ function paneNumber(paneId) {
 
 /**
  * Every terminal pane of the session (the sidebar excluded), or null when the
- * session is gone: { paneId, pid, command, bookmark, visible, status }.
+ * session is gone: { paneId, pid, command, bookmark, visible, status, path, title }.
  */
 function listSessionPanes() {
   const fields = [
     '#{pane_id}', '#{window_index}', '#{pane_index}', '#{window_name}', '#{pane_pid}',
-    '#{pane_current_command}', `#{${PANE_BOOKMARK_OPT}}`, `#{${PANE_STATUS_OPT}}`
+    '#{pane_current_command}', `#{${PANE_BOOKMARK_OPT}}`, `#{${PANE_STATUS_OPT}}`,
+    '#{pane_current_path}', '#{pane_title}'
   ];
   const out = tmuxQuiet(['list-panes', '-s', '-t', SESSION_NAME, '-F', fields.join('\t')]);
   if (out === null) return null;
@@ -132,7 +134,7 @@ function listSessionPanes() {
   let activeId;
   for (const line of out.split('\n')) {
     if (!line.trim()) continue;
-    const [paneId, winIndex, paneIndex, winName, pid, command, tag, status] = line.split('\t');
+    const [paneId, winIndex, paneIndex, winName, pid, command, tag, status, cwd, ...title] = line.split('\t');
     if (winIndex === '0' && paneIndex === '0') continue; // sidebar
     const visible = winIndex === '0' && paneIndex === '1';
     let bookmark = tag || '';
@@ -142,7 +144,10 @@ function listSessionPanes() {
       if (activeId === undefined) activeId = getActiveBookmarkId();
       bookmark = activeId || '';
     }
-    panes.push({ paneId, pid: parseInt(pid, 10), command: command || '', bookmark, visible, status: status || '' });
+    panes.push({
+      paneId, pid: parseInt(pid, 10), command: command || '', bookmark, visible, status: status || '',
+      path: cwd || '', title: title.join(' ')
+    });
   }
   return panes;
 }
@@ -166,6 +171,17 @@ function rememberTab(key, paneId) {
 
 function rememberedTab(key) {
   return (tmuxQuiet(['show-options', '-t', SESSION_NAME, '-qv', `@ca_tab_${key}`]) || '').trim();
+}
+
+/** Every remembered tab in one tmux call: bookmark key -> pane id. */
+function rememberedTabs() {
+  const out = tmuxQuiet(['show-options', '-t', SESSION_NAME]) || '';
+  const map = {};
+  for (const line of out.split('\n')) {
+    const m = line.match(/^@ca_tab_(\S+)\s+"?(%\d+)"?\s*$/);
+    if (m) map[m[1]] = m[2];
+  }
+  return map;
 }
 
 function bookmarkDir(bookmark) {
@@ -371,6 +387,17 @@ function tmuxText(text) {
   return String(text || '').replace(/[#\t\r\n]/g, '');
 }
 
+// Emoji of the BMP drawn two columns wide (East Asian Width "W")
+const WIDE_BMP = [
+  [0x231a, 0x231b], [0x23e9, 0x23ec], [0x23f0, 0x23f0], [0x23f3, 0x23f3], [0x25fd, 0x25fe],
+  [0x2614, 0x2615], [0x2648, 0x2653], [0x267f, 0x267f], [0x2693, 0x2693], [0x26a1, 0x26a1],
+  [0x26aa, 0x26ab], [0x26bd, 0x26be], [0x26c4, 0x26c5], [0x26ce, 0x26ce], [0x26d4, 0x26d4],
+  [0x26ea, 0x26ea], [0x26f2, 0x26f3], [0x26f5, 0x26f5], [0x26fa, 0x26fa], [0x26fd, 0x26fd],
+  [0x2705, 0x2705], [0x270a, 0x270b], [0x2728, 0x2728], [0x274c, 0x274c], [0x274e, 0x274e],
+  [0x2753, 0x2755], [0x2757, 0x2757], [0x2795, 0x2797], [0x27b0, 0x27b0], [0x27bf, 0x27bf],
+  [0x2b1b, 0x2b1c], [0x2b50, 0x2b50], [0x2b55, 0x2b55]
+];
+
 /** Terminal columns taken by a string (emoji and CJK are 2 columns wide). */
 function cellWidth(text) {
   let width = 0;
@@ -379,7 +406,8 @@ function cellWidth(text) {
     if (cp === 0xfe0f || cp === 0x200d) continue;
     const wide = cp >= 0x1f000 ||
       (cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf) ||
-      (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xff00 && cp <= 0xff60);
+      (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xff00 && cp <= 0xff60) ||
+      WIDE_BMP.some(([a, b]) => cp >= a && cp <= b);
     width += wide ? 2 : 1;
   }
   return width;
@@ -395,23 +423,107 @@ function fitText(text, max) {
   return out + '…';
 }
 
+// ---------------------------------------------------------------------------
+// Tab names (automatic): the running program, plus what it is about
+// ---------------------------------------------------------------------------
+
+const SHELLS = new Set(['bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'mksh', 'tcsh', 'csh', 'nu', 'elvish', 'xonsh', 'pwsh']);
+// Words of a title that only repeat which agent runs ("GitHub Copilot", "Claude Code")
+const GENERIC_TITLE_WORDS = new Set([
+  'claude', 'code', 'copilot', 'github', 'cli', 'codex', 'openai', 'gemini', 'opencode',
+  'antigravity', 'agy', 'agent', 'ai'
+]);
+
+/** A pane title without the spinner / status symbols agents put in front. */
+function cleanTitle(title) {
+  return tmuxText(title).replace(/^[^\p{L}\p{N}~/.]+/u, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Automatic name of a tab: { name, detail }. name is the program (fish,
+ * copilot, claude…); detail tells two tabs of the same program apart: the
+ * title the program gives its terminal (Claude Code: the task), or for a
+ * shell the folder it moved to.
+ */
+function tabLabel(tab, bookmarkPath = '') {
+  const name = (tmuxText(tab.command) || 'shell').split('/').pop().replace(/^-/, '');
+  let detail = '';
+  if (SHELLS.has(name)) {
+    if (tab.path && bookmarkPath && path.resolve(tab.path) !== path.resolve(bookmarkPath)) {
+      detail = path.basename(tab.path) || tab.path;
+    }
+  } else {
+    const title = cleanTitle(tab.title);
+    const host = os.hostname();
+    const words = title.toLowerCase().split(/[\s\-_:·|]+/).filter(Boolean);
+    const generic = words.length === 0 || words.every(w => w === name.toLowerCase() || GENERIC_TITLE_WORDS.has(w));
+    const isPath = /^(~|\/)/.test(title);
+    if (!generic && !isPath && title !== host && title !== host.split('.')[0]) detail = title;
+  }
+  return { name, detail };
+}
+
+/** "copilot · Fix login" (or just "copilot"). */
+function tabLabelText(tab, bookmarkPath = '') {
+  const { name, detail } = tabLabel(tab, bookmarkPath);
+  return detail ? `${name} · ${detail}` : name;
+}
+
+/** Visible width of a tmux format string (styles removed). */
+function formatWidth(format) {
+  return cellWidth(String(format || '').replace(/#\[[^\]]*\]/g, '').replace(/##/g, '#'));
+}
+
+const MIN_LABEL = 6;
+const MAX_LABEL = 32;
+
+/**
+ * Widest each tab label may be so they all fit in `room` columns: short names
+ * keep their size and leave their unused room to the long ones.
+ */
+function labelLimits(widths, room) {
+  const limits = widths.map(w => Math.min(w, MAX_LABEL));
+  let left = room;
+  let open = limits.map((_, i) => i);
+  while (open.length > 0) {
+    const share = Math.floor(left / open.length);
+    const fitting = open.filter(i => limits[i] <= share);
+    if (fitting.length === 0) {
+      for (const i of open) limits[i] = Math.max(MIN_LABEL, share);
+      break;
+    }
+    for (const i of fitting) left -= limits[i];
+    open = open.filter(i => limits[i] > share);
+  }
+  return limits;
+}
+
 /**
  * Build the tab bar (a tmux format string): the bookmark name above the
  * sidebar, then one clickable tab per pane and a "+" button above the terminal.
+ * width / reserved: window width and room kept for the hints on the right, to
+ * size the tab names so everything fits.
+ *
+ * Click ranges are named "tab<pane number>" (no "%": tmux would expand it).
  */
-function buildTabBar({ name = '', tabs = [], sidebarWidth = DEFAULT_SIDEBAR_WIDTH }) {
+function buildTabBar({ name = '', tabs = [], sidebarWidth = DEFAULT_SIDEBAR_WIDTH, bookmarkPath = '', width = 0, reserved = 0 }) {
   const left = fitText(` 📁 ${tmuxText(name)}`, Math.max(4, sidebarWidth - 1));
   const pad = ' '.repeat(Math.max(0, sidebarWidth - cellWidth(left)));
   let bar = `#[fg=#89b4fa,bold]${left}${pad}#[default]#[fg=#45475a]│#[default]`;
 
+  const labels = tabs.map(tab => tabLabelText(tab, bookmarkPath));
+  const limits = labelLimits(labels.map(cellWidth), width > 0
+    ? width - (sidebarWidth + 1 + 4 + reserved) - tabs.length * 10 // name, border, "+", hints; " " + "  N 🔔 " + "  " per tab
+    : Infinity);
+
   tabs.forEach((tab, i) => {
     const icon = TAB_ICONS[tab.status] ? `${TAB_ICONS[tab.status]} ` : '';
-    const label = fitText(tmuxText(tab.command) || 'shell', 16);
+    const label = fitText(labels[i], limits[i]);
     let style;
     if (tab.visible) style = 'bg=#89b4fa,fg=#1e1e2e,bold';
     else if (tab.status === 'input_required') style = 'bg=#f9e2af,fg=#1e1e2e,bold';
     else style = 'bg=#313244,fg=#cdd6f4';
-    bar += ` #[range=user|tab${tab.paneId}]#[${style}] ${i + 1} ${icon}${label} #[default]#[norange]`;
+    bar += ` #[range=user|tab${paneNumber(tab.paneId)}]#[${style}]  ${i + 1} ${icon}${label}  #[default]#[norange]`;
   });
   bar += ' #[range=user|newtab]#[fg=#a6e3a1,bold] + #[default]#[norange]';
   return bar;
@@ -425,10 +537,15 @@ function refreshTabBar(panes = null) {
   if (!all) return;
   const key = getActiveBookmarkId();
   const bm = findBookmarkByKey(key);
+  const widths = getPaneWidths();
+  const hints = tmuxQuiet(['show-options', '-t', SESSION_NAME, '-qv', 'status-right']) || '';
   const value = buildTabBar({
     name: bm ? bm.name : '',
     tabs: tabsOf(all, key),
-    sidebarWidth: currentSidebarWidth()
+    sidebarWidth: currentSidebarWidth(),
+    bookmarkPath: bm ? bm.path : '',
+    width: widths ? widths.windowWidth : 0,
+    reserved: formatWidth(hints.trim()) + 1
   });
   if (value === lastTabBar) return;
   lastTabBar = value;
@@ -450,9 +567,12 @@ function handleTabCommand(args) {
     case 'prev':
       return cycleTab(-1);
     case 'click':
-      if (arg === 'newtab') return newTab();
-      if (arg && arg.startsWith('tab%')) return selectTabPane(arg.slice(3));
-      return undefined;
+    case 'click2': {
+      // click2: second / third click of a fast series (never opens extra tabs)
+      if (arg === 'newtab') return action === 'click' ? newTab() : undefined;
+      const m = /^tab%?(\d+)$/.exec(arg || '');
+      return m ? selectTabPane(`%${m[1]}`) : undefined;
+    }
     case 'ensure':
       if (!ensureTerminalPane()) refreshTabBar();
       return undefined;
@@ -561,7 +681,11 @@ function bindKeys({ switcherKey, newTabKey, popupCommand, tabCommand }) {
   for (let n = 1; n <= 9; n++) bind('-n', `M-${n}`, ...tab(`select ${n}`));
   bind('-n', 'C-PPage', ...tab('prev'));
   bind('-n', 'C-NPage', ...tab('next'));
+  // A click within 300 ms of the previous one is a SecondClick / TripleClick
+  // event, not a MouseDown: bind them too or fast clicks are lost.
   bind('-n', 'MouseDown1Status', ...tab("click '#{mouse_status_range}'"));
+  bind('-n', 'SecondClick1Status', ...tab("click2 '#{mouse_status_range}'"));
+  bind('-n', 'TripleClick1Status', ...tab("click2 '#{mouse_status_range}'"));
 
   // Mouse selections go to the system clipboard (Wayland / X11 / macOS / OSC 52)
   const clipCmd = 'wl-copy 2>/dev/null || xclip -in -selection clipboard 2>/dev/null || pbcopy 2>/dev/null || true';
@@ -694,6 +818,10 @@ module.exports = {
   listSessionPanes,
   tabsOf,
   rememberedTab,
+  rememberedTabs,
+  tabLabel,
+  tabLabelText,
+  TAB_ICONS,
   setPaneStatus,
   switchToBookmark,
   newTab,
@@ -703,6 +831,8 @@ module.exports = {
   closeBookmarkSession,
   buildTabBar,
   cellWidth,
+  fitText,
+  labelLimits,
   refreshTabBar,
   handleTabCommand,
   getMainWindowPaneCount,

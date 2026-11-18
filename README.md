@@ -112,7 +112,7 @@ The bar at the top shows the active bookmark's tabs, right above the terminal: r
 | `exit` | Closes the tab (the next one is shown; the last tab is replaced by a fresh shell) |
 | `t` (in the sidebar) | New tab for the selected bookmark |
 
-Each tab is named after the command running in it and shows its status (`🔔`, `⚡`, `✓`…). A tab waiting for input is highlighted in yellow. In the sidebar, `⧉2` means the bookmark has 2 tabs, and its badge shows the most urgent status of all its tabs. Switching bookmarks brings back the tab you were last using.
+Tabs are named automatically: the program running in it, followed by what it is about, so two `copilot` or `claude` tabs can be told apart. For an agent this is the title it gives its terminal (Claude Code: the current task, e.g. `claude · Fix login form`); for a shell, the folder it moved to (`fish · web`). Each tab shows its status (`🔔`, `⚡`, `✓`…) and a tab waiting for input is highlighted in yellow. The sidebar lists each bookmark's tabs under it, like the `Ctrl+E` switcher (`●` = the tab it opens on): click a tab there to show it. The bookmark badge shows the most urgent status of all its tabs. Switching bookmarks brings back the tab you were last using.
 
 > `Ctrl+T` is taken by CLI-Agent everywhere in the workspace (Claude Code uses it to show the task list, bash to swap two characters). Set `"newTabKey"` to another key, or to `""` to keep only the `+` button and `Alt+1…9`.
 

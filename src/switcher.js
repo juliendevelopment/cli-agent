@@ -1,5 +1,5 @@
 const { loadConfig, getRecentHistory, getBookmarkKey } = require('./config');
-const { switchToBookmark, getActiveBookmarkId, keyLabel, tabsOf, rememberedTab } = require('./tmux');
+const { switchToBookmark, getActiveBookmarkId, keyLabel, tabsOf, rememberedTab, tabLabelText } = require('./tmux');
 const { getAgentProcessNames } = require('./agents');
 const {
   STATUS_TYPES,
@@ -74,6 +74,7 @@ class SwitcherApp {
           n,
           last: n === tabs.length - 1,
           isCurrent: tab.paneId === current,
+          label: tabLabelText(tab, bm.path),
           status: tabStatuses.get(tab.paneId) || STATUS_TYPES.IDLE
         });
       });
@@ -148,7 +149,7 @@ class SwitcherApp {
 
   tabLine(row, isSelected) {
     const branch = row.last ? '└' : '├';
-    const label = truncate(`${row.n + 1} ${row.tab.command || 'shell'}`, 20).padEnd(21);
+    const label = truncate(`${row.n + 1} ${row.label}`, 34).padEnd(35);
     const badge = row.status.id === STATUS_TYPES.IDLE.id ? '' : ` ${statusBadge(row.status)}`;
     const mark = row.isCurrent ? ` ${colors.gray}●${colors.reset}` : '';
     return isSelected
