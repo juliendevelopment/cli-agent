@@ -25,6 +25,7 @@ const TERMINAL_PANE = `${SESSION_NAME}:0.1`;
 const PANE_BOOKMARK_OPT = '@ca_bm';
 const PANE_STATUS_OPT = '@ca_status';
 const TAB_BAR_OPT = '@ca_tabs';
+const RECENT_TABS_OPT = '@ca_recent_tabs';
 const DEFAULT_NEW_TAB_KEY = 'C-t';
 
 function sanitizeKey(keyOrBookmark) {
@@ -187,6 +188,66 @@ function rememberedTabs() {
   return map;
 }
 
+const isPaneId = id => /^%\d+$/.test(String(id || ''));
+
+/** Parse comma-separated pane IDs stored in @ca_recent_tabs. */
+function parseRecentTabs(raw) {
+  const seen = new Set();
+  const out = [];
+  for (const part of String(raw || '').split(',')) {
+    const id = part.trim();
+    if (isPaneId(id) && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Push `paneId` to the front of the tab MRU list, optionally recording the
+ * previously visible tab right behind it and pruning closed panes.
+ */
+function pushRecentTab(list, paneId, prevPaneId = '', livePaneIds = null, max = 30) {
+  const live = livePaneIds instanceof Set
+    ? livePaneIds
+    : (Array.isArray(livePaneIds) ? new Set(livePaneIds) : null);
+  const result = [];
+  const add = id => {
+    if (isPaneId(id) && !result.includes(id)) result.push(id);
+  };
+  add(paneId);
+  if (prevPaneId && prevPaneId !== paneId && (!live || live.has(prevPaneId))) {
+    add(prevPaneId);
+  }
+  for (const id of list || []) {
+    if (!live || live.has(id)) add(id);
+  }
+  return result.slice(0, max);
+}
+
+/** Recently shown tab pane IDs (most recent first). */
+function recentTabs() {
+  return parseRecentTabs(tmuxQuiet(['show-options', '-t', SESSION_NAME, '-qv', RECENT_TABS_OPT]));
+}
+
+function setRecentTabs(ids) {
+  if (ids.length > 0) tmuxQuiet(['set-option', '-t', SESSION_NAME, RECENT_TABS_OPT, ids.join(',')]);
+  else tmuxQuiet(['set-option', '-u', '-t', SESSION_NAME, RECENT_TABS_OPT]);
+}
+
+function recordRecentTab(paneId, prevPaneId = '', panes = null) {
+  if (!isPaneId(paneId)) return;
+  const raw = (tmuxQuiet(['show-options', '-t', SESSION_NAME, '-qv', RECENT_TABS_OPT]) || '').trim();
+  const current = parseRecentTabs(raw);
+  const liveIds = Array.isArray(panes) ? new Set(panes.map(p => p.paneId)) : null;
+  const next = pushRecentTab(current, paneId, prevPaneId, liveIds);
+  const serialized = next.join(',');
+  if (serialized && serialized !== raw) {
+    setRecentTabs(next);
+  }
+}
+
 function bookmarkDir(bookmark) {
   return bookmark && bookmark.path && fs.existsSync(bookmark.path) ? bookmark.path : process.cwd();
 }
@@ -221,6 +282,7 @@ function showPane(paneId, panes, bookmarkKey = '') {
   const targetKey = (target && target.bookmark) || bookmarkKey;
   if (visible && visible.paneId === paneId) {
     rememberTab(visible.bookmark || targetKey, paneId);
+    recordRecentTab(paneId, '', all);
     return true;
   }
   let ok;
@@ -233,7 +295,10 @@ function showPane(paneId, panes, bookmarkKey = '') {
     ok = tmuxQuiet(['join-pane', '-h', '-d', '-s', paneId, '-t', SIDEBAR_PANE]) !== null;
     setSidebarWidth(width);
   }
-  if (ok && targetKey) rememberTab(targetKey, paneId);
+  if (ok) {
+    if (targetKey) rememberTab(targetKey, paneId);
+    recordRecentTab(paneId, visible ? visible.paneId : '', all);
+  }
   return ok;
 }
 
@@ -353,9 +418,12 @@ function ensureTerminalPane() {
       '-P', '-F', '#{pane_id}', userShell()
     ]);
     const paneId = out ? out.trim() : '';
-    if (paneId && key) {
-      tagPane(paneId, key);
-      rememberTab(key, paneId);
+    if (paneId) {
+      if (key) {
+        tagPane(paneId, key);
+        rememberTab(key, paneId);
+      }
+      recordRecentTab(paneId, '', panes);
     }
     setSidebarWidth(width);
   }
@@ -368,7 +436,9 @@ function ensureTerminalPane() {
 /** Close every hidden tab of a bookmark (the visible one is untagged). */
 function closeBookmarkSession(bookmarkKeyOrObj) {
   const key = sanitizeKey(bookmarkKeyOrObj);
-  for (const tab of tabsOf(listSessionPanes(), key)) {
+  const tabs = tabsOf(listSessionPanes(), key);
+  const closedIds = new Set(tabs.map(t => t.paneId));
+  for (const tab of tabs) {
     if (!tab.visible) {
       tmuxQuiet(['kill-pane', '-t', tab.paneId]);
     } else {
@@ -377,6 +447,11 @@ function closeBookmarkSession(bookmarkKeyOrObj) {
     }
   }
   tmuxQuiet(['set-option', '-u', '-t', SESSION_NAME, `@ca_tab_${key}`]);
+  if (closedIds.size > 0) {
+    const current = recentTabs();
+    const next = current.filter(id => !closedIds.has(id));
+    if (next.length !== current.length) setRecentTabs(next);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -794,6 +869,7 @@ function startWorkspace({ initialBookmark, scriptPath, initialWidth = DEFAULT_SI
     tagPane(firstPane, initialId);
     rememberTab(initialId, firstPane);
   }
+  if (firstPane) recordRecentTab(firstPane);
 
   // 3. Sidebar width, re-applied whenever a client attaches
   setSidebarWidth(width);
@@ -856,6 +932,10 @@ module.exports = {
   tabsOf,
   rememberedTab,
   rememberedTabs,
+  parseRecentTabs,
+  pushRecentTab,
+  recentTabs,
+  recordRecentTab,
   tabLabel,
   tabLabelText,
   TAB_ICONS,

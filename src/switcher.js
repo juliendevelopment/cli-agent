@@ -1,5 +1,15 @@
 const { loadConfig, getRecentHistory, getBookmarkKey } = require('./config');
-const { switchToBookmark, getActiveBookmarkId, keyLabel, tabsOf, rememberedTab, tabLabelText } = require('./tmux');
+const {
+  switchToBookmark,
+  getActiveBookmarkId,
+  keyLabel,
+  tabsOf,
+  rememberedTab,
+  recentTabs,
+  tabLabelText,
+  cellWidth,
+  fitText
+} = require('./tmux');
 const { getAgentProcessNames } = require('./agents');
 const {
   STATUS_TYPES,
@@ -9,16 +19,47 @@ const {
   getSessionPanes,
   computeBookmarkStatus
 } = require('./monitor');
-const { colors, truncate, drawLine, paint, hideCursor, showCursor } = require('./ui');
+const { colors, truncate, stripAnsi, drawLine, paint, hideCursor, showCursor } = require('./ui');
 
 const MAX_ITEMS = 9;
 
+/**
+ * Pick the row pre-selected when opening the switcher: the last used tab
+ * (so Ctrl+E -> Enter toggles between the last 2 tabs), falling back to the
+ * previous bookmark when no other open tab exists yet.
+ */
+function findInitialSelection(rows, recentTabIds = []) {
+  const activeTab = rows.find(r => r.type === 'tab' && r.tab && r.tab.visible);
+  const activePaneId = activeTab ? activeTab.tab.paneId : null;
+
+  for (const paneId of recentTabIds) {
+    if (paneId === activePaneId) continue;
+    const idx = rows.findIndex(r => r.type === 'tab' && r.tab && r.tab.paneId === paneId);
+    if (idx !== -1) return { index: idx, previousTabId: paneId };
+  }
+
+  const prevBookmark = rows.findIndex(r => r.type === 'bookmark' && r.index === 1);
+  if (prevBookmark !== -1) return { index: prevBookmark, previousTabId: null };
+
+  const otherTab = rows.findIndex(r => r.type === 'tab' && r.tab && r.tab.paneId !== activePaneId);
+  if (otherTab !== -1) return { index: otherTab, previousTabId: rows[otherTab].tab.paneId };
+
+  return { index: 0, previousTabId: null };
+}
+
 class SwitcherApp {
-  constructor() {
-    this.config = loadConfig();
+  constructor(deps = {}) {
+    this.config = deps.config || loadConfig();
     this.bookmarks = this.config.bookmarks || [];
-    this.recentHistory = getRecentHistory();
-    this.activeId = getActiveBookmarkId();
+    this.recentHistory = deps.recentHistory || getRecentHistory();
+    this.recentTabs = deps.recentTabs || recentTabs();
+    this.activeId = deps.activeId !== undefined ? deps.activeId : getActiveBookmarkId();
+    this.deps = {
+      getSessionPanes: deps.getSessionPanes || getSessionPanes,
+      loadManualStatuses: deps.loadManualStatuses || loadManualStatuses,
+      rememberedTab: deps.rememberedTab || rememberedTab,
+      switchToBookmark: deps.switchToBookmark || switchToBookmark
+    };
 
     const ordered = [];
     const seen = new Set();
@@ -42,9 +83,9 @@ class SwitcherApp {
     this.items = ordered.slice(0, MAX_ITEMS);
     this.statuses = {};
     this.rows = this.buildRows();
-    // Like IntelliJ: pre-select the previous session
-    const previous = this.rows.findIndex(r => r.type === 'bookmark' && r.index === 1);
-    this.selectedIndex = previous === -1 ? 0 : previous;
+    const initial = findInitialSelection(this.rows, this.recentTabs);
+    this.selectedIndex = initial.index;
+    this.previousTabId = initial.previousTabId;
     this.scroll = 0;
   }
 
@@ -54,9 +95,9 @@ class SwitcherApp {
    */
   buildRows() {
     const rows = [];
-    const manual = loadManualStatuses();
+    const manual = this.deps.loadManualStatuses();
     const agentNames = getAgentProcessNames(this.config);
-    const { panes } = getSessionPanes();
+    const { panes } = this.deps.getSessionPanes();
     this.items.forEach((bm, index) => {
       const key = getBookmarkKey(bm);
       const tabs = tabsOf([...(panes.get(key) || [])], key);
@@ -65,7 +106,7 @@ class SwitcherApp {
       this.statuses[key] = status;
       rows.push({ type: 'bookmark', bm, index });
       // The tab shown when switching to this bookmark
-      const current = key === this.activeId ? (tabs.find(t => t.visible) || {}).paneId : rememberedTab(key);
+      const current = key === this.activeId ? (tabs.find(t => t.visible) || {}).paneId : this.deps.rememberedTab(key);
       tabs.forEach((tab, n) => {
         rows.push({
           type: 'tab',
@@ -107,8 +148,8 @@ class SwitcherApp {
   }
 
   choose(row) {
-    if (row && row.type === 'tab') switchToBookmark(row.bm, '', true, row.tab.paneId);
-    else if (row) switchToBookmark(row.bm, '', true);
+    if (row && row.type === 'tab') this.deps.switchToBookmark(row.bm, '', true, row.tab.paneId);
+    else if (row) this.deps.switchToBookmark(row.bm, '', true);
     this.exit();
   }
 
@@ -139,7 +180,7 @@ class SwitcherApp {
     const key = getBookmarkKey(bm);
     let tag = '';
     if (key === this.activeId) tag = `${colors.gray}(current)${colors.reset}`;
-    else if (index === 1) tag = `${colors.brightCyan}(previous)${colors.reset}`;
+    else if (!this.previousTabId && index === 1) tag = `${colors.brightCyan}(previous)${colors.reset}`;
     const badge = statusBadge(this.statuses[key] || STATUS_TYPES.IDLE);
     const name = truncate(bm.name, 22).padEnd(23);
     return isSelected
@@ -147,14 +188,21 @@ class SwitcherApp {
       : `   ${colors.dim}${index + 1}.${colors.reset} ${name} ${badge} ${tag}`;
   }
 
-  tabLine(row, isSelected) {
+  tabLine(row, isSelected, width = 62) {
     const branch = row.last ? '└' : '├';
-    const label = truncate(`${row.n + 1} ${row.label}`, 34).padEnd(35);
     const badge = row.status.id === STATUS_TYPES.IDLE.id ? '' : ` ${statusBadge(row.status)}`;
     const mark = row.isCurrent ? ` ${colors.gray}●${colors.reset}` : '';
+    const prev = this.previousTabId && row.tab.paneId === this.previousTabId
+      ? ` ${colors.brightCyan}(previous)${colors.reset}`
+      : '';
+    const suffixLen = cellWidth(stripAnsi(`${badge}${mark}${prev}`));
+    const padTarget = Math.min(35, Math.max(9, width - 9 - suffixLen));
+    const labelMax = Math.max(8, Math.min(34, padTarget - 1));
+    const truncated = fitText(`${row.n + 1} ${row.label}`, labelMax);
+    const label = truncated + ' '.repeat(Math.max(0, padTarget - cellWidth(truncated)));
     return isSelected
-      ? `${colors.brightGreen} ▶    ${branch} ${colors.bold}${label}${colors.reset}${badge}${mark}`
-      : `      ${colors.gray}${branch}${colors.reset} ${label}${badge}${mark}`;
+      ? `${colors.brightGreen} ▶    ${branch} ${colors.bold}${label}${colors.reset}${badge}${mark}${prev}`
+      : `      ${colors.gray}${branch}${colors.reset} ${label}${badge}${mark}${prev}`;
   }
 
   render() {
@@ -173,7 +221,7 @@ class SwitcherApp {
     const visible = this.rows.slice(this.scroll, this.scroll + room);
     visible.forEach((row, i) => {
       const isSelected = this.scroll + i === this.selectedIndex;
-      lines.push(row.type === 'tab' ? this.tabLine(row, isSelected) : this.bookmarkLine(row, isSelected));
+      lines.push(row.type === 'tab' ? this.tabLine(row, isSelected, width) : this.bookmarkLine(row, isSelected));
     });
 
     lines.push(`${colors.dim}${colors.gray}${drawLine(width - 2)}${colors.reset}`);
@@ -188,7 +236,7 @@ function runSwitcher() {
   app.start();
 }
 
-module.exports = { SwitcherApp, runSwitcher };
+module.exports = { SwitcherApp, runSwitcher, findInitialSelection };
 
 if (require.main === module) {
   runSwitcher();

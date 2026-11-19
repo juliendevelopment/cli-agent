@@ -91,7 +91,7 @@ ${colors.bold}USAGE:${colors.reset}
   cli-agent help                        Display this help message
 
 ${colors.bold}GLOBAL SHORTCUTS (INSIDE CLI-AGENT):${colors.reset}
-  ${switcher.padEnd(14)} Quick switcher popup (Enter = toggle last 2 sessions)
+  ${switcher.padEnd(14)} Quick switcher popup (Enter = toggle last 2 tabs)
   Alt + ← / M-h  Jump to the sidebar
   Alt + → / M-l  Jump to the terminal pane
   F1 / F2        Focus sidebar / terminal
